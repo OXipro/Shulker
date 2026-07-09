@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM node:22 AS builder
+FROM --platform=$BUILDPLATFORM node:24 AS builder
 WORKDIR /build
 
 ARG BUILDPLATFORM
@@ -34,8 +34,12 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 
 COPY . .
 
-RUN pnpm exec nx build shulker-operator -- --target=$(cat /.rust-triple) \
-  && cp dist/rust/$(cat /.rust-triple)/release/shulker-operator dist/rust/release/shulker-operator
+RUN \
+    cd packages/shulker-sdk && npx buf generate && \
+    cd ../google-agones-sdk && npx buf generate && \
+    cd ../google-open-match-sdk && npx buf generate
+RUN cd packages/shulker-operator && cargo build --release --bins --target=$(cat /.rust-triple)
+RUN cp dist/rust/$(cat /.rust-triple)/release/shulker-operator dist/rust/release/shulker-operator
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=builder /build/dist/rust/release/shulker-operator /
