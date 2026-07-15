@@ -225,6 +225,7 @@ impl<'a> FleetBuilder {
                     }),
                     initial_delay_seconds: Some(10),
                     period_seconds: Some(10),
+                    timeout_seconds: Some(5),
                     ..Probe::default()
                 }),
                 image_pull_policy: Some("IfNotPresent".to_string()),

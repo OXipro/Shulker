@@ -26,13 +26,13 @@ class PlayerMovementService(private val agent: ShulkerProxyAgentCommon) {
 
         private val MSG_NOT_ACCEPTING_PLAYERS =
             createDisconnectMessage(
-                "Proxy is not accepting players, try reconnect.",
+                "We are victim from our success ! The Proxy(ies) are currently full. Please try again later!",
                 NamedTextColor.RED,
             )
 
         private val MSG_NO_LIMBO_FOUND =
             createDisconnectMessage(
-                "No limbo server found, please check your cluster configuration.",
+                "No Backup Server Found, Sorry! OXi prob messed up again :(",
                 NamedTextColor.RED,
             )
     }

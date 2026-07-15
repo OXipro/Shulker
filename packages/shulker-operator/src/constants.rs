@@ -13,5 +13,5 @@ pub const SHULKER_PLUGIN_VERSION: &str =
 #[cfg(not(debug_assertions))]
 pub const SHULKER_PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub const PROXY_IMAGE: &str = "itzg/mc-proxy:2025.1.0-java21";
-pub const MINECRAFT_SERVER_IMAGE: &str = "itzg/minecraft-server:2025.1.0-java21";
+pub const PROXY_IMAGE: &str = "itzg/mc-proxy:2025.10.0-java25";
+pub const MINECRAFT_SERVER_IMAGE: &str = "itzg/minecraft-server:2026.7.0-java25";
