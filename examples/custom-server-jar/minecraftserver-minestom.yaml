@@ -1,0 +1,22 @@
+apiVersion: shulkermc.io/v1alpha1
+kind: MinecraftServerFleet
+metadata:
+  name: minestom
+spec:
+  clusterRef:
+    name: custom-server-jar
+  replicas: 1
+  template:
+    spec:
+      clusterRef:
+        name: custom-server-jar
+      version:
+        channel: Paper
+        name: "1.21.4"
+        customJar:
+          url: https://url-to-minestom/server.jar
+      config: {}
+      podOverrides:
+        env:
+          - name: EXEC_DIRECTLY
+            value: "true"

@@ -1,17 +1,15 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
   "extends": "nx/presets/npm.json",
+  "useDaemonProcess": false,
   "targetDefaults": {
     "build": {
-      "cache": true
-    },
-    "lint": {
       "cache": true
     },
     "test": {
       "cache": true
     },
-    "e2e": {
+    "lint": {
       "cache": true
     },
     "buf": {
@@ -19,19 +17,23 @@
     }
   },
   "namedInputs": {
+    "default": ["{projectRoot}/**/*"],
     "rust:dependencies": [
       "{workspaceRoot}/.cargo/",
       "{workspaceRoot}/Cargo.toml",
       "{workspaceRoot}/Cargo.lock"
     ],
     "rust:test:dependencies": ["{workspaceRoot}/tarpaulin.toml"],
-    "java:dependencies": [
-      "{workspaceRoot}/build.gradle.kts",
-      "{workspaceRoot}/gradle.properties",
-      "{workspaceRoot}/settings.gradle.kts",
-      "{projectRoot}/build.gradle.kts",
-      "{projectRoot}/gradle.properties"
-    ],
     "docker:dependencies": ["{projectRoot}/Dockerfile"]
-  }
+  },
+  "plugins": [
+    {
+      "plugin": "@nx/gradle",
+      "options": {
+        "testTargetName": "test",
+        "classesTargetName": "classes",
+        "buildTargetName": "build"
+      }
+    }
+  ]
 }

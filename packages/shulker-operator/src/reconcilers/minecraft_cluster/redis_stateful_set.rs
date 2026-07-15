@@ -69,7 +69,7 @@ impl ResourceBuilder<'_> for RedisStatefulSetBuilder {
     }
 
     fn is_needed(&self, cluster: &Self::OwnerType) -> bool {
-        cluster.spec.redis.as_ref().map_or(true, |redis| {
+        cluster.spec.redis.as_ref().is_none_or(|redis| {
             redis.type_ == MinecraftClusterRedisDeploymentType::ManagedSingleNode
         })
     }
@@ -101,7 +101,7 @@ impl ResourceBuilder<'_> for RedisStatefulSetBuilder {
                     )),
                     ..LabelSelector::default()
                 },
-                service_name: RedisServiceBuilder::name(cluster),
+                service_name: Some(RedisServiceBuilder::name(cluster)),
                 replicas: Some(1),
                 template: RedisStatefulSetBuilder::get_pod_template_spec(cluster),
                 volume_claim_templates: Some(RedisStatefulSetBuilder::get_volume_claim_templates()),
