@@ -486,7 +486,7 @@ impl<'a> FleetBuilder {
         {
             env.append(&mut vec![
                 EnvVar {
-                    name: "SHULKER_PROXY_REDIS_USERNAME".to_string(),
+                    name: "SHULKER_REDIS_USERNAME".to_string(),
                     value_from: Some(EnvVarSource {
                         secret_key_ref: Some(SecretKeySelector {
                             name: redis_ref_credentials_secret_name.clone(),
@@ -498,7 +498,7 @@ impl<'a> FleetBuilder {
                     ..EnvVar::default()
                 },
                 EnvVar {
-                    name: "SHULKER_PROXY_REDIS_PASSWORD".to_string(),
+                    name: "SHULKER_REDIS_PASSWORD".to_string(),
                     value_from: Some(EnvVarSource {
                         secret_key_ref: Some(SecretKeySelector {
                             name: redis_ref_credentials_secret_name.clone(),
