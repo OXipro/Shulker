@@ -74,11 +74,11 @@ spec:
             effect: "NoSchedule" // [!code focus]
 ```
 
-## Customizing agones health check
+## Customizing agones health check <Badge type="tip" text="proxies" /> <Badge type="tip" text="servers" />
 
 Agones uses a health check to determine if a server is ready and healthy.
 You may want to customize the health check to better suit your needs
-(e.g. your server takes 1 minute to start, you may want to increase the `initial_delay_seconds` to 60).
+(e.g. your server takes 1 minute to start, you may want to increase the `initialDelaySeconds` to 60).
 
 ```yaml
 apiVersion: shulkermc.io/v1alpha1
@@ -94,8 +94,8 @@ spec:
       podOverrides: // [!code focus]
         health: // [!code focus]
           disabled: false // [!code focus]
-          initial_delay_seconds: 30 // [!code focus]
-          period_seconds: 15 // [!code focus]
+          initialDelaySeconds: 30 // [!code focus]
+          periodSeconds: 15 // [!code focus]
           failureThreshold: 5 // [!code focus]
 ```
 

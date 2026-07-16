@@ -13,10 +13,10 @@ global:
 # Configuration dedicated to the Shulker Operator
 operator:
   image:
-    repository: ghcr.io/jeremylvln/shulker-operator
+    repository: docker.io/oxipro/shulker-operator
     pullPolicy: IfNotPresent
     # Overrides the image tag whose default is the chart appVersion.
-    tag: ""
+    tag: "26.7.16.2"
 
   # Additional command line flags to pass.
   extraArgs: []

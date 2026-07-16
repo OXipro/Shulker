@@ -18,7 +18,7 @@ dependencies = [
  "getrandom 0.2.15",
  "once_cell",
  "version_check",
- "zerocopy 0.7.35",
+ "zerocopy",
 ]
 
 [[package]]
@@ -840,7 +840,7 @@ dependencies = [
 
 [[package]]
 name = "google-agones-crds"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "k8s-openapi",
  "kube",
@@ -852,7 +852,7 @@ dependencies = [
 
 [[package]]
 name = "google-agones-sdk"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "futures-core",
  "pbjson-types",
@@ -862,7 +862,7 @@ dependencies = [
 
 [[package]]
 name = "google-open-match-sdk"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "futures-core",
  "pbjson-types",

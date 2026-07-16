@@ -25,8 +25,12 @@ generate stable-with-prometheus \
   --set operator.metrics.enabled=true \
   --set operator.metrics.servicemonitor.enabled=true
 
+# generate next \
+#   --set operator.image.tag=next \
+#   --set shulker-addon-matchmaking.enabled=true \
+#   --set shulker-addon-matchmaking.image.tag=next
+
 generate next \
-  --set operator.image.tag=next \
   --set shulker-addon-matchmaking.enabled=true \
   --set shulker-addon-matchmaking.image.tag=next
 

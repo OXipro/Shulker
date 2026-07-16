@@ -1231,6 +1231,30 @@ spec:
                                 type: object
                               nullable: true
                               type: array
+                            health:
+                              description: Overrides Agones Health checks
+                              nullable: true
+                              properties:
+                                disabled:
+                                  description: Specify whether the health check should be disabled.
+                                  nullable: true
+                                  type: boolean
+                                failureThreshold:
+                                  description: Specify how much health failure is tolerated before the GameServer is considered unhealthy.
+                                  format: int32
+                                  nullable: true
+                                  type: integer
+                                initialDelaySeconds:
+                                  description: Specify the initial delay in seconds before the first health check is performed.
+                                  format: int32
+                                  nullable: true
+                                  type: integer
+                                periodSeconds:
+                                  description: Specify the period in seconds between health checks.
+                                  format: int32
+                                  nullable: true
+                                  type: integer
+                              type: object
                             image:
                               description: Image to use as replacement for the built-in one
                               nullable: true
@@ -3420,6 +3444,30 @@ spec:
                         type: object
                       nullable: true
                       type: array
+                    health:
+                      description: Overrides Agones Health checks
+                      nullable: true
+                      properties:
+                        disabled:
+                          description: Specify whether the health check should be disabled.
+                          nullable: true
+                          type: boolean
+                        failureThreshold:
+                          description: Specify how much health failure is tolerated before the GameServer is considered unhealthy.
+                          format: int32
+                          nullable: true
+                          type: integer
+                        initialDelaySeconds:
+                          description: Specify the initial delay in seconds before the first health check is performed.
+                          format: int32
+                          nullable: true
+                          type: integer
+                        periodSeconds:
+                          description: Specify the period in seconds between health checks.
+                          format: int32
+                          nullable: true
+                          type: integer
+                      type: object
                     image:
                       description: Image to use as replacement for the built-in one
                       nullable: true
@@ -5802,6 +5850,30 @@ spec:
                                 type: object
                               nullable: true
                               type: array
+                            health:
+                              description: Overrides Agones Health checks
+                              nullable: true
+                              properties:
+                                disabled:
+                                  description: Specify whether the health check should be disabled.
+                                  nullable: true
+                                  type: boolean
+                                failureThreshold:
+                                  description: Specify how much health failure is tolerated before the GameServer is considered unhealthy.
+                                  format: int32
+                                  nullable: true
+                                  type: integer
+                                initialDelaySeconds:
+                                  description: Specify the initial delay in seconds before the first health check is performed.
+                                  format: int32
+                                  nullable: true
+                                  type: integer
+                                periodSeconds:
+                                  description: Specify the period in seconds between health checks.
+                                  format: int32
+                                  nullable: true
+                                  type: integer
+                              type: object
                             image:
                               description: Image to use as replacement for the built-in one
                               nullable: true
@@ -7544,7 +7616,7 @@ spec:
       containers:
         - name: shulker-addon-matchmaking-director
           image: "ghcr.io/jeremylvln/shulker-addon-matchmaking:next"
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           args:
             - --metrics-bind-address=0.0.0.0:8080
           ports:
@@ -7744,8 +7816,8 @@ spec:
       serviceAccountName: shulker-operator
       containers:
         - name: shulker-operator
-          image: "ghcr.io/jeremylvln/shulker-operator:next"
-          imagePullPolicy: Always
+          image: "docker.io/oxipro/shulker-operator:next"
+          imagePullPolicy: IfNotPresent
           args:
             - --metrics-bind-address=0.0.0.0:8080
             - --api-bind-address=0.0.0.0:9090
