@@ -7570,7 +7570,7 @@ spec:
       serviceAccountName: shulker-operator
       containers:
         - name: shulker-operator
-          image: "docker.io/oxipro/shulker-operator:26.7.17.8"
+          image: "docker.io/oxipro/shulker-operator:26.7.18.1"
           imagePullPolicy: IfNotPresent
           args:
             - --metrics-bind-address=0.0.0.0:8080

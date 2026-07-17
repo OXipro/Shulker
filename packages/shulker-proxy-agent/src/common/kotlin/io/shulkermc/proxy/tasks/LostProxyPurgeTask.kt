@@ -3,6 +3,7 @@ package io.shulkermc.proxy.tasks
 import io.shulkermc.proxy.ProxyInterface
 import io.shulkermc.proxy.ShulkerProxyAgentCommon
 import java.util.concurrent.TimeUnit
+import java.util.logging.Level
 
 class LostProxyPurgeTask(private val agent: ShulkerProxyAgentCommon) : Runnable {
     companion object {
@@ -21,17 +22,26 @@ class LostProxyPurgeTask(private val agent: ShulkerProxyAgentCommon) : Runnable 
     }
 
     override fun run() {
-        val maybeLock = this.agent.cluster.cache.tryLockLostProxiesPurgeTask(this.agent.cluster.selfReference.name)
+        try {
+            val maybeLock =
+                this.agent.cluster.cache.tryLockLostProxiesPurgeTask(this.agent.cluster.selfReference.name)
 
-        maybeLock.ifPresent { lock ->
-            lock.use { _ ->
-                this.agent.cluster.cache.listRegisteredProxies()
-                    .filter { System.currentTimeMillis() - it.lastSeenAt.toEpochMilli() > PROXY_LOST_MILLIS_THRESHOLD }
-                    .forEach { proxy ->
-                        this.agent.cluster.cache.unregisterProxy(proxy.name)
-                        this.agent.logger.info("Unregistered lost proxy ${proxy.name}")
-                    }
+            maybeLock.ifPresent { lock ->
+                lock.use { _ ->
+                    this.agent.cluster.cache.listRegisteredProxies()
+                        .filter {
+                            System.currentTimeMillis() - it.lastSeenAt.toEpochMilli() > PROXY_LOST_MILLIS_THRESHOLD
+                        }
+                        .forEach { proxy ->
+                            this.agent.cluster.cache.unregisterProxy(proxy.name)
+                            this.agent.logger.info("Unregistered lost proxy ${proxy.name}")
+                        }
+                }
             }
+        } catch (
+            @Suppress("TooGenericExceptionCaught") e: Exception,
+        ) {
+            this.agent.logger.log(Level.WARNING, "Failed to run lost proxy purge task", e)
         }
     }
 }

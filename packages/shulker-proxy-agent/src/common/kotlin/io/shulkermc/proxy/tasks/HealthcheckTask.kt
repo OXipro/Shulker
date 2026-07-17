@@ -3,6 +3,7 @@ package io.shulkermc.proxy.tasks
 import io.shulkermc.proxy.ProxyInterface
 import io.shulkermc.proxy.ShulkerProxyAgentCommon
 import java.util.concurrent.TimeUnit
+import java.util.logging.Level
 
 class HealthcheckTask(private val agent: ShulkerProxyAgentCommon) : Runnable {
     companion object {
@@ -19,7 +20,20 @@ class HealthcheckTask(private val agent: ShulkerProxyAgentCommon) : Runnable {
     }
 
     override fun run() {
-        this.agent.cluster.agonesGateway.sendHealthcheck()
-        this.agent.cluster.cache.updateProxyLastSeen(this.agent.cluster.selfReference.name)
+        try {
+            this.agent.cluster.agonesGateway.sendHealthcheck()
+        } catch (
+            @Suppress("TooGenericExceptionCaught") e: Exception,
+        ) {
+            this.agent.logger.log(Level.WARNING, "Failed to send Agones healthcheck", e)
+        }
+
+        try {
+            this.agent.cluster.cache.updateProxyLastSeen(this.agent.cluster.selfReference.name)
+        } catch (
+            @Suppress("TooGenericExceptionCaught") e: Exception,
+        ) {
+            this.agent.logger.log(Level.WARNING, "Failed to update proxy last-seen in Redis", e)
+        }
     }
 }

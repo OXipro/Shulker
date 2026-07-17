@@ -1,6 +1,10 @@
 package io.shulkermc.cluster.api
 
+import redis.clients.jedis.DefaultJedisClientConfig
+import redis.clients.jedis.HostAndPort
 import redis.clients.jedis.JedisPool
+import redis.clients.jedis.JedisPoolConfig
+import java.time.Duration
 import java.util.Optional
 import kotlin.jvm.optionals.getOrDefault
 
@@ -17,16 +21,34 @@ data class Configuration(
         val password: Optional<String>,
     ) {
         fun createJedisPool(): JedisPool {
-            if (this.username.isPresent && this.password.isPresent) {
-                return JedisPool(
-                    this.host,
-                    this.port,
-                    this.username.get(),
-                    this.password.get(),
-                )
+            val poolConfig =
+                JedisPoolConfig().apply {
+                    maxTotal = 16
+                    maxIdle = 8
+                    minIdle = 1
+                    testOnBorrow = true
+                    testWhileIdle = true
+                    setMaxWait(Duration.ofSeconds(3))
+                }
+
+            val clientConfigBuilder =
+                DefaultJedisClientConfig.builder()
+                    .connectionTimeoutMillis(3_000)
+                    .socketTimeoutMillis(3_000)
+
+            // Password-only (ACL default user) and user+password are both valid.
+            if (this.username.isPresent) {
+                clientConfigBuilder.user(this.username.get())
+            }
+            if (this.password.isPresent) {
+                clientConfigBuilder.password(this.password.get())
             }
 
-            return JedisPool(this.host, this.port)
+            return JedisPool(
+                poolConfig,
+                HostAndPort(this.host, this.port),
+                clientConfigBuilder.build(),
+            )
         }
     }
 
