@@ -11,7 +11,7 @@ use strum::{Display, IntoStaticStr};
 use crate::{
     condition::HasConditions,
     resourceref::ResourceRefSpec,
-    schemas::{FleetAutoscalingSpec, ImageOverrideSpec, TemplateSpec},
+    schemas::{FleetAutoscalingSpec, ImageOverrideSpec, ProbeOverrideSpec, TemplateSpec},
 };
 
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -225,6 +225,11 @@ pub struct ProxyFleetTemplatePodOverridesSpec {
     /// Overrides Agones Health checks
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health: Option<GameServerHealthSpec>,
+
+    /// Overrides the `proxy` container's readiness probe (the
+    /// `probe-readiness.sh` exec probe)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readiness_probe: Option<ProbeOverrideSpec>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]

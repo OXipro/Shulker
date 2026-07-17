@@ -96,6 +96,7 @@ lazy_static! {
                         volumes: None,
                         ports: None,
                         health: None,
+                        readiness_probe: None,
                     })
                 },
             },

@@ -98,7 +98,7 @@ spec:
                   value: 1.20.1
                 - name: EXTRA_ENV
                   value: my_value
-              image: "itzg/minecraft-server:2025.1.0-java21"
+              image: "itzg/minecraft-server:2026.7.0-java25"
               imagePullPolicy: IfNotPresent
               name: minecraft-server
               ports:

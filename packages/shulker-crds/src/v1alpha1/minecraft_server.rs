@@ -8,7 +8,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::{Display, IntoStaticStr};
 
-use crate::{condition::HasConditions, resourceref::ResourceRefSpec, schemas::ImageOverrideSpec};
+use crate::{
+    condition::HasConditions,
+    resourceref::ResourceRefSpec,
+    schemas::{ImageOverrideSpec, ProbeOverrideSpec},
+};
 
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
 #[kube(
@@ -210,6 +214,11 @@ pub struct MinecraftServerPodOverridesSpec {
     /// Overrides Agones Health checks
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health: Option<GameServerHealthSpec>,
+
+    /// Overrides the server container's readiness probe. Also applies
+    /// to `MinecraftServerFleet`, which templates this spec
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readiness_probe: Option<ProbeOverrideSpec>,
 }
 
 /// The status object of `MinecraftServer`

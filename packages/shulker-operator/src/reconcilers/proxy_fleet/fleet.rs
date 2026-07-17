@@ -25,6 +25,7 @@ use kube::Api;
 use kube::Client;
 use kube::ResourceExt;
 use lazy_static::lazy_static;
+use shulker_crds::schemas::ProbeOverrideSpec;
 use shulker_crds::v1alpha1::minecraft_cluster::MinecraftCluster;
 use shulker_crds::v1alpha1::proxy_fleet::ProxyFleetTemplateVersion;
 use url::Url;
@@ -202,11 +203,42 @@ impl<'a> FleetBuilder {
         Ok(game_server_spec)
     }
 
+    /// Resolves the effective readiness probe settings for the `proxy`
+    /// container, applying overrides in this order of precedence:
+    /// 1. `ProxyFleet.spec.template.spec.podOverrides.readinessProbe`
+    /// 2. Shulker's hardcoded defaults (matches historical behaviour,
+    ///    except `timeoutSeconds` which used to silently fall back to
+    ///    Kubernetes' own default of 1 second)
+    fn resolve_readiness_probe(fleet_override: Option<&ProbeOverrideSpec>) -> ProbeOverrideSpec {
+        let hardcoded_default = ProbeOverrideSpec {
+            initial_delay_seconds: Some(10),
+            period_seconds: Some(10),
+            timeout_seconds: Some(5),
+            failure_threshold: Some(3),
+            success_threshold: Some(1),
+        };
+
+        match fleet_override {
+            Some(fleet_override) => fleet_override.merged_over(&hardcoded_default),
+            None => hardcoded_default,
+        }
+    }
+
     async fn get_pod_template_spec(
         &self,
         context: &FleetBuilderContext<'a>,
         proxy_fleet: &ProxyFleet,
     ) -> Result<PodTemplateSpec, anyhow::Error> {
+        let readiness_probe_spec = Self::resolve_readiness_probe(
+            proxy_fleet
+                .spec
+                .template
+                .spec
+                .pod_overrides
+                .as_ref()
+                .and_then(|po| po.readiness_probe.as_ref()),
+        );
+
         let mut pod_spec = PodSpec {
             init_containers: Some(vec![Container {
                 image: Some("alpine:latest".to_string()),
@@ -248,8 +280,11 @@ impl<'a> FleetBuilder {
                             format!("{}/probe-readiness.sh", PROXY_DATA_DIR),
                         ]),
                     }),
-                    initial_delay_seconds: Some(10),
-                    period_seconds: Some(10),
+                    initial_delay_seconds: readiness_probe_spec.initial_delay_seconds,
+                    period_seconds: readiness_probe_spec.period_seconds,
+                    timeout_seconds: readiness_probe_spec.timeout_seconds,
+                    failure_threshold: readiness_probe_spec.failure_threshold,
+                    success_threshold: readiness_probe_spec.success_threshold,
                     ..Probe::default()
                 }),
                 image_pull_policy: Some("IfNotPresent".to_string()),

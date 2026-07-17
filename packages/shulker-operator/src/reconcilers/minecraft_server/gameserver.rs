@@ -1128,6 +1128,7 @@ mod tests {
                 maven_repository: constants::SHULKER_PLUGIN_REPOSITORY.to_string(),
                 version: constants::SHULKER_PLUGIN_VERSION.to_string(),
             },
+            owning_fleet: None,
         };
 
         // W
