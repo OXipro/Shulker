@@ -2,12 +2,34 @@ package io.shulkermc.cluster.api.adapters.cache
 
 import io.shulkermc.cluster.api.data.PlayerPosition
 import io.shulkermc.cluster.api.data.RegisteredProxy
+import io.shulkermc.cluster.api.data.RegisteredServer
+import redis.clients.jedis.Jedis
 import redis.clients.jedis.JedisPool
 import redis.clients.jedis.params.SetParams
 import java.time.Instant
 import java.util.Optional
 import java.util.UUID
 
+/**
+ * Unified Redis layout (no duplicated player membership):
+ *
+ * ```
+ * shulker:proxies                         SET  proxy names
+ * shulker:proxies:info:{name}             HASH capacity, lastSeen, acceptingPlayers, fleetName, tags
+ * shulker:proxies:by-tag:{tag}            SET  proxy names
+ *
+ * shulker:servers                         SET  server names
+ * shulker:servers:info:{name}             HASH capacity, fleetName, tags, address, source, acceptingPlayers, lastUpdated
+ * shulker:servers:by-tag:{tag}            SET  server names
+ * shulker:servers:external-dynamic        SET  dynamically registered external servers
+ *
+ * shulker:players:position                HASH playerId → "proxyName|serverName"   (sole player presence)
+ *
+ * shulker:uuid-cache:id-to-name:{id}      STRING (TTL)
+ * shulker:uuid-cache:name-to-id:{name}    STRING (TTL)
+ * shulker:locks:...                       STRING (TTL)
+ * ```
+ */
 class RedisCacheAdapter(private val jedisPool: JedisPool) : CacheAdapter {
     companion object {
         private const val PROXY_LOST_PURGE_LOCK_SECONDS = 15L
@@ -15,101 +37,331 @@ class RedisCacheAdapter(private val jedisPool: JedisPool) : CacheAdapter {
 
         private const val KEY_PREFIX = "shulker"
 
-        // Proxy keys
-        private const val PROXIES_KEY_PREFIX = "$KEY_PREFIX:proxies"
-        private const val PROXIES_SET_KEY = PROXIES_KEY_PREFIX
-        private const val PROXIES_CAPACITY_HASH_KEY = "$PROXIES_KEY_PREFIX:capacity"
-        private const val PROXIES_LAST_SEEN_HASH_KEY = "$PROXIES_KEY_PREFIX:last-seen"
-        private val PROXIES_PLAYERS_SET_KEY = { proxyName: String -> "$PROXIES_KEY_PREFIX:$proxyName:players" }
+        // Proxies
+        private const val PROXIES_SET_KEY = "$KEY_PREFIX:proxies"
+        private val PROXIES_INFO_HASH_KEY = { name: String -> "$KEY_PREFIX:proxies:info:$name" }
+        private val PROXIES_BY_TAG_SET_KEY = { tag: String -> "$KEY_PREFIX:proxies:by-tag:$tag" }
 
-        // Server keys
-        private const val SERVERS_KEY_PREFIX = "$KEY_PREFIX:servers"
-        private val SERVERS_PLAYERS_SET_KEY = { serverName: String -> "$SERVERS_KEY_PREFIX:$serverName:players" }
+        // Servers
+        private const val SERVERS_SET_KEY = "$KEY_PREFIX:servers"
+        private const val SERVERS_EXTERNAL_DYNAMIC_SET_KEY = "$KEY_PREFIX:servers:external-dynamic"
+        private val SERVERS_INFO_HASH_KEY = { name: String -> "$KEY_PREFIX:servers:info:$name" }
+        private val SERVERS_BY_TAG_SET_KEY = { tag: String -> "$KEY_PREFIX:servers:by-tag:$tag" }
 
-        // Player keys
-        private const val PLAYERS_KEY_PREFIX = "$KEY_PREFIX:players"
-        private const val PLAYERS_ONLINE_SET_KEY = "$PLAYERS_KEY_PREFIX:online"
-        private const val PLAYERS_CURRENT_PROXY_HASH_KEY = "$PLAYERS_KEY_PREFIX:current-proxy"
-        private const val PLAYERS_CURRENT_SERVER_HASH_KEY = "$PLAYERS_KEY_PREFIX:current-server"
+        // Players — single source of truth for online presence + location
+        private const val PLAYERS_POSITION_HASH_KEY = "$KEY_PREFIX:players:position"
 
-        // UUID cache keys
+        // UUID name cache (Mojang lookups, unrelated to online presence)
         private const val UUID_CACHE_KEY_PREFIX = "$KEY_PREFIX:uuid-cache"
         private val UUID_CACHE_NAME_TO_ID_KEY = { name: String -> "$UUID_CACHE_KEY_PREFIX:name-to-id:$name" }
         private val UUID_CACHE_ID_TO_NAME_KEY = { id: String -> "$UUID_CACHE_KEY_PREFIX:id-to-name:$id" }
 
-        // Lock keys
-        private const val LOCKS_KEY_PREFIX = "$KEY_PREFIX:locks"
-        private const val LOCKS_LOST_PROXIES_PURGE_KEY = "$LOCKS_KEY_PREFIX:lost-proxies-purge"
+        // Locks
+        private const val LOCKS_LOST_PROXIES_PURGE_KEY = "$KEY_PREFIX:locks:lost-proxies-purge"
+
+        // Pub/Sub
+        const val SERVER_UPDATED_CHANNEL = "$KEY_PREFIX:events:server-updated"
+        const val EXTERNAL_SERVER_REGISTER_CHANNEL = "$KEY_PREFIX:events:external-server-register"
+        const val EXTERNAL_SERVER_UNREGISTER_CHANNEL = "$KEY_PREFIX:events:external-server-unregister"
+
+        // Info hash fields (shared naming for proxies & servers where applicable)
+        private const val FIELD_CAPACITY = "capacity"
+        private const val FIELD_LAST_SEEN = "lastSeen"
+        private const val FIELD_ACCEPTING_PLAYERS = "acceptingPlayers"
+        private const val FIELD_FLEET_NAME = "fleetName"
+        private const val FIELD_TAGS = "tags"
+        private const val FIELD_ADDRESS = "address"
+        private const val FIELD_SOURCE = "source"
+        private const val FIELD_LAST_UPDATED = "lastUpdated"
+
+        private const val POSITION_SEPARATOR = "|"
     }
+
+    // ==================== Proxies ====================
 
     override fun registerProxy(
         proxyName: String,
         proxyCapacity: Int,
+        fleetName: String?,
+        tags: List<String>,
+        acceptingPlayers: Boolean,
     ) {
         this.jedisPool.resource.use { jedis ->
+            val infoKey = PROXIES_INFO_HASH_KEY(proxyName)
+            val previousTags = parseTags(jedis.hget(infoKey, FIELD_TAGS))
+
             val pipeline = jedis.pipelined()
             pipeline.sadd(PROXIES_SET_KEY, proxyName)
-            pipeline.hset(PROXIES_CAPACITY_HASH_KEY, proxyName, proxyCapacity.toString())
-            pipeline.hset(PROXIES_LAST_SEEN_HASH_KEY, proxyName, System.currentTimeMillis().toString())
+            pipeline.hset(
+                infoKey,
+                mapOf(
+                    FIELD_CAPACITY to proxyCapacity.toString(),
+                    FIELD_LAST_SEEN to System.currentTimeMillis().toString(),
+                    FIELD_ACCEPTING_PLAYERS to acceptingPlayers.toString(),
+                    FIELD_FLEET_NAME to fleetName.orEmpty(),
+                    FIELD_TAGS to tags.joinToString(","),
+                ),
+            )
+            previousTags.forEach { tag -> pipeline.srem(PROXIES_BY_TAG_SET_KEY(tag), proxyName) }
+            tags.forEach { tag -> pipeline.sadd(PROXIES_BY_TAG_SET_KEY(tag), proxyName) }
             pipeline.sync()
         }
     }
 
     override fun unregisterProxy(proxyName: String) {
         this.jedisPool.resource.use { jedis ->
-            val playersRedisKey = PROXIES_PLAYERS_SET_KEY(proxyName)
-            val playerIds = jedis.smembers(playersRedisKey)
+            val infoKey = PROXIES_INFO_HASH_KEY(proxyName)
+            val previousTags = parseTags(jedis.hget(infoKey, FIELD_TAGS))
+            val playersOnProxy = playersOnProxy(jedis, proxyName)
 
             val pipeline = jedis.pipelined()
             pipeline.srem(PROXIES_SET_KEY, proxyName)
-            pipeline.hdel(PROXIES_CAPACITY_HASH_KEY, proxyName)
-            pipeline.hdel(PROXIES_LAST_SEEN_HASH_KEY, proxyName)
-            pipeline.del(playersRedisKey)
+            pipeline.del(infoKey)
+            previousTags.forEach { tag -> pipeline.srem(PROXIES_BY_TAG_SET_KEY(tag), proxyName) }
+            playersOnProxy.forEach { playerId -> pipeline.hdel(PLAYERS_POSITION_HASH_KEY, playerId) }
             pipeline.sync()
-
-            val playerPipeline = jedis.pipelined()
-            playerIds.forEach { playerId ->
-                playerPipeline.srem(PLAYERS_ONLINE_SET_KEY, playerId)
-                playerPipeline.hdel(PLAYERS_CURRENT_PROXY_HASH_KEY, playerId)
-                playerPipeline.hdel(PLAYERS_CURRENT_SERVER_HASH_KEY, playerId)
-            }
-            playerPipeline.sync()
         }
     }
 
     override fun updateProxyLastSeen(proxyName: String) {
         this.jedisPool.resource.use { jedis ->
-            jedis.hset(PROXIES_LAST_SEEN_HASH_KEY, proxyName, System.currentTimeMillis().toString())
+            if (!jedis.sismember(PROXIES_SET_KEY, proxyName)) {
+                return
+            }
+            jedis.hset(PROXIES_INFO_HASH_KEY(proxyName), FIELD_LAST_SEEN, System.currentTimeMillis().toString())
+        }
+    }
+
+    override fun updateProxyAcceptingPlayers(
+        proxyName: String,
+        acceptingPlayers: Boolean,
+    ) {
+        this.jedisPool.resource.use { jedis ->
+            if (!jedis.sismember(PROXIES_SET_KEY, proxyName)) {
+                return
+            }
+            jedis.hset(PROXIES_INFO_HASH_KEY(proxyName), FIELD_ACCEPTING_PLAYERS, acceptingPlayers.toString())
         }
     }
 
     override fun listRegisteredProxies(): List<RegisteredProxy> {
         this.jedisPool.resource.use { jedis ->
-            val registeredProxies = jedis.smembers(PROXIES_SET_KEY)
-            val capacities = jedis.hgetAll(PROXIES_CAPACITY_HASH_KEY)
-            val lastSeenMillis = jedis.hgetAll(PROXIES_LAST_SEEN_HASH_KEY)
+            return jedis.smembers(PROXIES_SET_KEY).mapNotNull { buildRegisteredProxy(jedis, it) }
+        }
+    }
 
-            return registeredProxies.map { proxyName ->
-                val capacity = capacities[proxyName]?.toInt() ?: 0
-                val lastSeen = lastSeenMillis[proxyName]?.toLong()?.let(Instant::ofEpochMilli) ?: Instant.now()
-                RegisteredProxy(proxyName, capacity, lastSeen)
-            }
+    override fun getProxy(proxyName: String): Optional<RegisteredProxy> {
+        this.jedisPool.resource.use { jedis ->
+            return Optional.ofNullable(buildRegisteredProxy(jedis, proxyName))
+        }
+    }
+
+    override fun listProxiesByTag(tag: String): List<RegisteredProxy> {
+        this.jedisPool.resource.use { jedis ->
+            return jedis.smembers(PROXIES_BY_TAG_SET_KEY(tag)).mapNotNull { buildRegisteredProxy(jedis, it) }
         }
     }
 
     override fun tryLockLostProxiesPurgeTask(ownerProxyName: String): Optional<CacheAdapter.Lock> =
         this.tryLock(ownerProxyName, LOCKS_LOST_PROXIES_PURGE_KEY, PROXY_LOST_PURGE_LOCK_SECONDS)
 
-    override fun unregisterServer(serverName: String) {
+    // ==================== Servers ====================
+
+    override fun registerServer(
+        name: String,
+        fleetName: String?,
+        tags: List<String>,
+        maxPlayers: Int,
+        acceptingPlayers: Boolean?,
+        address: String?,
+        source: String,
+    ) {
         this.jedisPool.resource.use { jedis ->
-            jedis.del(SERVERS_PLAYERS_SET_KEY(serverName))
+            val infoKey = SERVERS_INFO_HASH_KEY(name)
+            val existing = jedis.hgetAll(infoKey)
+            val existingSource = existing[FIELD_SOURCE]
+
+            if (
+                existingSource != null &&
+                source == CacheAdapter.SOURCE_EXTERNAL_DYNAMIC &&
+                existingSource != CacheAdapter.SOURCE_EXTERNAL_DYNAMIC
+            ) {
+                return
+            }
+
+            val previousTags = parseTags(existing[FIELD_TAGS])
+            val existingCapacity = existing[FIELD_CAPACITY]?.toIntOrNull() ?: 0
+            val effectiveCapacity = if (maxPlayers > 0) maxPlayers else existingCapacity
+            val effectiveAccepting =
+                acceptingPlayers
+                    ?: existing[FIELD_ACCEPTING_PLAYERS]?.toBooleanStrictOrNull()
+                    ?: true
+            val effectiveFleet = fleetName ?: existing[FIELD_FLEET_NAME]?.takeIf { it.isNotBlank() }
+            val effectiveTags = tags.ifEmpty { previousTags }
+            val effectiveAddress = address ?: existing[FIELD_ADDRESS]
+
+            val fields =
+                mutableMapOf(
+                    FIELD_CAPACITY to effectiveCapacity.toString(),
+                    FIELD_FLEET_NAME to effectiveFleet.orEmpty(),
+                    FIELD_TAGS to effectiveTags.joinToString(","),
+                    FIELD_ACCEPTING_PLAYERS to effectiveAccepting.toString(),
+                    FIELD_SOURCE to source,
+                    FIELD_LAST_UPDATED to System.currentTimeMillis().toString(),
+                )
+            if (effectiveAddress != null) {
+                fields[FIELD_ADDRESS] = effectiveAddress
+            }
+
+            val pipeline = jedis.pipelined()
+            pipeline.sadd(SERVERS_SET_KEY, name)
+            if (source == CacheAdapter.SOURCE_EXTERNAL_DYNAMIC) {
+                pipeline.sadd(SERVERS_EXTERNAL_DYNAMIC_SET_KEY, name)
+            } else {
+                pipeline.srem(SERVERS_EXTERNAL_DYNAMIC_SET_KEY, name)
+            }
+            pipeline.hset(infoKey, fields)
+            previousTags.forEach { tag -> pipeline.srem(SERVERS_BY_TAG_SET_KEY(tag), name) }
+            effectiveTags.forEach { tag -> pipeline.sadd(SERVERS_BY_TAG_SET_KEY(tag), name) }
+            pipeline.sync()
+
+            jedis.publish(SERVER_UPDATED_CHANNEL, name)
         }
     }
 
+    override fun unregisterServer(serverName: String) {
+        this.jedisPool.resource.use { jedis ->
+            val infoKey = SERVERS_INFO_HASH_KEY(serverName)
+            val previousTags = parseTags(jedis.hget(infoKey, FIELD_TAGS))
+
+            val pipeline = jedis.pipelined()
+            pipeline.srem(SERVERS_SET_KEY, serverName)
+            pipeline.srem(SERVERS_EXTERNAL_DYNAMIC_SET_KEY, serverName)
+            previousTags.forEach { tag -> pipeline.srem(SERVERS_BY_TAG_SET_KEY(tag), serverName) }
+            pipeline.del(infoKey)
+            pipeline.sync()
+
+            jedis.publish(SERVER_UPDATED_CHANNEL, serverName)
+        }
+    }
+
+    override fun updateServerAcceptingPlayers(
+        name: String,
+        acceptingPlayers: Boolean,
+    ) {
+        this.jedisPool.resource.use { jedis ->
+            val infoKey = SERVERS_INFO_HASH_KEY(name)
+            if (!jedis.exists(infoKey)) {
+                return
+            }
+            jedis.hset(
+                infoKey,
+                mapOf(
+                    FIELD_ACCEPTING_PLAYERS to acceptingPlayers.toString(),
+                    FIELD_LAST_UPDATED to System.currentTimeMillis().toString(),
+                ),
+            )
+            jedis.publish(SERVER_UPDATED_CHANNEL, name)
+        }
+    }
+
+    override fun updateServerMaxPlayers(
+        name: String,
+        maxPlayers: Int,
+    ) {
+        this.jedisPool.resource.use { jedis ->
+            val infoKey = SERVERS_INFO_HASH_KEY(name)
+            if (!jedis.exists(infoKey)) {
+                return
+            }
+            jedis.hset(infoKey, FIELD_CAPACITY, maxPlayers.toString())
+        }
+    }
+
+    override fun listAllServers(): List<RegisteredServer> {
+        this.jedisPool.resource.use { jedis ->
+            val playerCounts = countPlayersByServer(jedis)
+            return jedis.smembers(SERVERS_SET_KEY).mapNotNull { buildRegisteredServer(jedis, it, playerCounts) }
+        }
+    }
+
+    override fun listServersByTag(tag: String): List<RegisteredServer> {
+        this.jedisPool.resource.use { jedis ->
+            val playerCounts = countPlayersByServer(jedis)
+            return jedis.smembers(SERVERS_BY_TAG_SET_KEY(tag)).mapNotNull { buildRegisteredServer(jedis, it, playerCounts) }
+        }
+    }
+
+    override fun getServer(name: String): Optional<RegisteredServer> {
+        this.jedisPool.resource.use { jedis ->
+            return Optional.ofNullable(buildRegisteredServer(jedis, name, countPlayersByServer(jedis)))
+        }
+    }
+
+    override fun registerExternalServer(
+        name: String,
+        address: String,
+        tags: List<String>,
+        maxPlayers: Int,
+    ): Boolean {
+        this.jedisPool.resource.use { jedis ->
+            val existingSource = jedis.hget(SERVERS_INFO_HASH_KEY(name), FIELD_SOURCE)
+            if (
+                existingSource != null &&
+                existingSource != CacheAdapter.SOURCE_EXTERNAL_DYNAMIC
+            ) {
+                return false
+            }
+        }
+
+        this.registerServer(
+            name = name,
+            fleetName = null,
+            tags = tags,
+            maxPlayers = maxPlayers,
+            acceptingPlayers = true,
+            address = address,
+            source = CacheAdapter.SOURCE_EXTERNAL_DYNAMIC,
+        )
+
+        this.jedisPool.resource.use { jedis ->
+            jedis.publish(EXTERNAL_SERVER_REGISTER_CHANNEL, name)
+        }
+        return true
+    }
+
+    override fun unregisterExternalServer(name: String): Boolean {
+        this.jedisPool.resource.use { jedis ->
+            val source = jedis.hget(SERVERS_INFO_HASH_KEY(name), FIELD_SOURCE)
+            if (source != CacheAdapter.SOURCE_EXTERNAL_DYNAMIC) {
+                return false
+            }
+        }
+
+        this.unregisterServer(name)
+        this.jedisPool.resource.use { jedis ->
+            jedis.publish(EXTERNAL_SERVER_UNREGISTER_CHANNEL, name)
+        }
+        return true
+    }
+
+    override fun listExternalDynamicServers(): List<RegisteredServer> {
+        this.jedisPool.resource.use { jedis ->
+            val playerCounts = countPlayersByServer(jedis)
+            return jedis.smembers(SERVERS_EXTERNAL_DYNAMIC_SET_KEY)
+                .mapNotNull { buildRegisteredServer(jedis, it, playerCounts) }
+        }
+    }
+
+    // ==================== Players ====================
+
     override fun listPlayersInServer(serverName: String): List<UUID> {
         this.jedisPool.resource.use { jedis ->
-            val playerIds = jedis.smembers(SERVERS_PLAYERS_SET_KEY(serverName))
-            return playerIds.map(UUID::fromString)
+            return jedis.hgetAll(PLAYERS_POSITION_HASH_KEY)
+                .mapNotNull { (playerId, position) ->
+                    val parsed = parsePosition(position) ?: return@mapNotNull null
+                    if (parsed.second == serverName) UUID.fromString(playerId) else null
+                }
         }
     }
 
@@ -119,76 +371,34 @@ class RedisCacheAdapter(private val jedisPool: JedisPool) : CacheAdapter {
         serverName: String,
     ) {
         this.jedisPool.resource.use { jedis ->
-            val playerIdString = playerId.toString()
-            val oldProxyName = jedis.hget(PLAYERS_CURRENT_PROXY_HASH_KEY, playerIdString)
-            val oldServerName = jedis.hget(PLAYERS_CURRENT_SERVER_HASH_KEY, playerIdString)
-
-            val pipeline = jedis.pipelined()
-            pipeline.sadd(PLAYERS_ONLINE_SET_KEY, playerIdString)
-            pipeline.hset(PLAYERS_CURRENT_PROXY_HASH_KEY, playerIdString, proxyName)
-            pipeline.hset(PLAYERS_CURRENT_SERVER_HASH_KEY, playerIdString, serverName)
-
-            if (oldProxyName != null) {
-                pipeline.srem(PROXIES_PLAYERS_SET_KEY(oldProxyName), playerIdString)
-            }
-            pipeline.sadd(PROXIES_PLAYERS_SET_KEY(proxyName), playerIdString)
-
-            if (oldServerName != null) {
-                pipeline.srem(SERVERS_PLAYERS_SET_KEY(oldServerName), playerIdString)
-            }
-            pipeline.sadd(SERVERS_PLAYERS_SET_KEY(serverName), playerIdString)
-
-            pipeline.sync()
+            jedis.hset(
+                PLAYERS_POSITION_HASH_KEY,
+                playerId.toString(),
+                encodePosition(proxyName, serverName),
+            )
         }
     }
 
     override fun unsetPlayerPosition(playerId: UUID) {
         this.jedisPool.resource.use { jedis ->
-            val playerIdString = playerId.toString()
-            val currentProxyName = jedis.hget(PLAYERS_CURRENT_PROXY_HASH_KEY, playerIdString)
-            val currentServerName = jedis.hget(PLAYERS_CURRENT_SERVER_HASH_KEY, playerIdString)
-
-            val pipeline = jedis.pipelined()
-            pipeline.srem(PLAYERS_ONLINE_SET_KEY, playerIdString)
-            pipeline.hdel(PLAYERS_CURRENT_PROXY_HASH_KEY, playerIdString)
-            pipeline.hdel(PLAYERS_CURRENT_SERVER_HASH_KEY, playerIdString)
-
-            if (currentProxyName != null) {
-                pipeline.srem(PROXIES_PLAYERS_SET_KEY(currentProxyName), playerIdString)
-            }
-
-            if (currentServerName != null) {
-                pipeline.srem(SERVERS_PLAYERS_SET_KEY(currentServerName), playerIdString)
-            }
-
-            pipeline.sync()
+            jedis.hdel(PLAYERS_POSITION_HASH_KEY, playerId.toString())
         }
     }
 
     override fun getPlayerPosition(playerId: UUID): Optional<PlayerPosition> {
         this.jedisPool.resource.use { jedis ->
-            val playerIdString = playerId.toString()
-
-            val pipeline = jedis.pipelined()
-            val proxyNameResponse = pipeline.hget(PLAYERS_CURRENT_PROXY_HASH_KEY, playerIdString)
-            val serverNameResponse = pipeline.hget(PLAYERS_CURRENT_SERVER_HASH_KEY, playerIdString)
-            pipeline.sync()
-
-            if (proxyNameResponse != null && serverNameResponse != null) {
-                val proxyName = proxyNameResponse.get()
-                val serverName = serverNameResponse.get()
-                return Optional.of(PlayerPosition(proxyName, serverName))
-            } else {
-                this.unsetPlayerPosition(playerId)
+            val raw = jedis.hget(PLAYERS_POSITION_HASH_KEY, playerId.toString()) ?: return Optional.empty()
+            val parsed = parsePosition(raw) ?: run {
+                jedis.hdel(PLAYERS_POSITION_HASH_KEY, playerId.toString())
+                return Optional.empty()
             }
-
-            return Optional.empty()
+            return Optional.of(PlayerPosition(parsed.first, parsed.second))
         }
     }
 
     override fun isPlayerConnected(playerId: UUID): Boolean {
         this.jedisPool.resource.use { jedis ->
-            return jedis.sismember(PLAYERS_ONLINE_SET_KEY, playerId.toString())
+            return jedis.hexists(PLAYERS_POSITION_HASH_KEY, playerId.toString())
         }
     }
 
@@ -225,21 +435,115 @@ class RedisCacheAdapter(private val jedisPool: JedisPool) : CacheAdapter {
             val responses = playerIds.associateWith { uuid -> pipeline.get(UUID_CACHE_ID_TO_NAME_KEY(uuid.toString())) }
             pipeline.sync()
 
-            return responses.mapValues { (_, response) -> response.get() }
+            return responses.mapNotNull { (uuid, response) ->
+                val name = response.get() ?: return@mapNotNull null
+                uuid to name
+            }.toMap()
         }
     }
 
     override fun countOnlinePlayers(): Int {
         this.jedisPool.resource.use { jedis ->
-            return jedis.scard(PLAYERS_ONLINE_SET_KEY).toInt()
+            return jedis.hlen(PLAYERS_POSITION_HASH_KEY).toInt()
         }
     }
 
     override fun countPlayerCapacity(): Int {
         this.jedisPool.resource.use { jedis ->
-            return jedis.hgetAll(PROXIES_CAPACITY_HASH_KEY).values.sumOf { it.toInt() }
+            return jedis.smembers(PROXIES_SET_KEY).sumOf { proxyName ->
+                jedis.hget(PROXIES_INFO_HASH_KEY(proxyName), FIELD_CAPACITY)?.toIntOrNull() ?: 0
+            }
         }
     }
+
+    // ==================== Builders ====================
+
+    private fun buildRegisteredProxy(
+        jedis: Jedis,
+        name: String,
+    ): RegisteredProxy? {
+        if (!jedis.sismember(PROXIES_SET_KEY, name)) {
+            return null
+        }
+
+        val info = jedis.hgetAll(PROXIES_INFO_HASH_KEY(name))
+        if (info.isEmpty()) {
+            return null
+        }
+
+        return RegisteredProxy(
+            name,
+            info[FIELD_CAPACITY]?.toIntOrNull() ?: 0,
+            info[FIELD_LAST_SEEN]?.toLongOrNull()?.let(Instant::ofEpochMilli) ?: Instant.now(),
+            info[FIELD_FLEET_NAME]?.takeIf { it.isNotBlank() },
+            parseTags(info[FIELD_TAGS]),
+            info[FIELD_ACCEPTING_PLAYERS]?.toBooleanStrictOrNull() ?: true,
+        )
+    }
+
+    private fun buildRegisteredServer(
+        jedis: Jedis,
+        name: String,
+        playerCountsByServer: Map<String, Int>,
+    ): RegisteredServer? {
+        val info = jedis.hgetAll(SERVERS_INFO_HASH_KEY(name))
+        if (info.isEmpty()) {
+            return null
+        }
+
+        val source = info[FIELD_SOURCE] ?: CacheAdapter.SOURCE_MANAGED
+
+        return RegisteredServer(
+            name,
+            info[FIELD_FLEET_NAME]?.takeIf { it.isNotBlank() },
+            parseTags(info[FIELD_TAGS]),
+            info[FIELD_ADDRESS]?.takeIf { it.isNotBlank() },
+            info[FIELD_CAPACITY]?.toIntOrNull() ?: 0,
+            playerCountsByServer[name] ?: 0,
+            info[FIELD_ACCEPTING_PLAYERS]?.toBooleanStrictOrNull() ?: true,
+            source != CacheAdapter.SOURCE_MANAGED,
+            info[FIELD_LAST_UPDATED]?.toLongOrNull()?.let(Instant::ofEpochMilli) ?: Instant.now(),
+        )
+    }
+
+    private fun countPlayersByServer(jedis: Jedis): Map<String, Int> {
+        val counts = HashMap<String, Int>()
+        jedis.hgetAll(PLAYERS_POSITION_HASH_KEY).values.forEach { raw ->
+            val serverName = parsePosition(raw)?.second ?: return@forEach
+            counts[serverName] = (counts[serverName] ?: 0) + 1
+        }
+        return counts
+    }
+
+    private fun playersOnProxy(
+        jedis: Jedis,
+        proxyName: String,
+    ): List<String> =
+        jedis.hgetAll(PLAYERS_POSITION_HASH_KEY)
+            .mapNotNull { (playerId, position) ->
+                val parsed = parsePosition(position) ?: return@mapNotNull null
+                if (parsed.first == proxyName) playerId else null
+            }
+
+    private fun encodePosition(
+        proxyName: String,
+        serverName: String,
+    ): String = "$proxyName$POSITION_SEPARATOR$serverName"
+
+    private fun parsePosition(raw: String): Pair<String, String>? {
+        val separatorIndex = raw.indexOf(POSITION_SEPARATOR)
+        if (separatorIndex <= 0 || separatorIndex >= raw.length - 1) {
+            return null
+        }
+        return raw.substring(0, separatorIndex) to raw.substring(separatorIndex + 1)
+    }
+
+    private fun parseTags(raw: String?): List<String> =
+        raw
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?: emptyList()
 
     private fun tryLock(
         ownerProxyName: String,

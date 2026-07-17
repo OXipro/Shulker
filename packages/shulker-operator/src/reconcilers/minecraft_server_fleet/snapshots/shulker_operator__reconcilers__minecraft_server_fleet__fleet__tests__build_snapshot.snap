@@ -69,6 +69,8 @@ spec:
                   value: ""
                 - name: SHULKER_SERVER_LIFECYCLE_STRATEGY
                   value: AllocateWhenNotEmpty
+                - name: SHULKER_SERVER_MAX_PLAYERS
+                  value: "42"
                 - name: EULA
                   value: "TRUE"
                 - name: COPY_CONFIG_DEST

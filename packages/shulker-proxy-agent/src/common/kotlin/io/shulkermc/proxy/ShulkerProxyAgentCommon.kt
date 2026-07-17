@@ -57,7 +57,13 @@ class ShulkerProxyAgentCommon(val proxyInterface: ProxyInterface, val logger: Lo
                 )
             }
 
-            this.cluster.cache.registerProxy(this.cluster.selfReference.name, this.proxyInterface.getPlayerCapacity())
+            this.cluster.cache.registerProxy(
+                proxyName = this.cluster.selfReference.name,
+                proxyCapacity = this.proxyInterface.getPlayerCapacity(),
+                fleetName = this.cluster.owningFleetReference.map { it.name }.orElse(null),
+                tags = emptyList(),
+                acceptingPlayers = true,
+            )
             this.cluster.agonesGateway.setReady()
 
             this.logger.info("Proxy is ready")

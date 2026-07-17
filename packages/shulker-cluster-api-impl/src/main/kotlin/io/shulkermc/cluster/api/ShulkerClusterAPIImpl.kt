@@ -14,6 +14,8 @@ import io.shulkermc.cluster.api.adapters.mojang.MojangGatewayAdapter
 import io.shulkermc.cluster.api.adapters.pubsub.RedisPubSubAdapter
 import io.shulkermc.cluster.api.data.KubernetesObjectRef
 import io.shulkermc.cluster.api.data.PlayerPosition
+import io.shulkermc.cluster.api.data.RegisteredProxy
+import io.shulkermc.cluster.api.data.RegisteredServer
 import io.shulkermc.cluster.api.messaging.MessagingBus
 import io.shulkermc.sdk.ShulkerSDK
 import io.shulkermc.sdk.ShulkerSDKImpl
@@ -144,5 +146,37 @@ class ShulkerClusterAPIImpl(val logger: Logger) : ShulkerClusterAPI(), Closeable
         }
 
         return Optional.empty()
+    }
+
+    override fun listProxies(): List<RegisteredProxy> = this.cache.listRegisteredProxies()
+
+    override fun getProxyById(proxyName: String): Optional<RegisteredProxy> = this.cache.getProxy(proxyName)
+
+    override fun getProxiesByTag(tag: String): List<RegisteredProxy> = this.cache.listProxiesByTag(tag)
+
+    override fun listServers(): List<RegisteredServer> = this.cache.listAllServers()
+
+    override fun getServerById(serverName: String): Optional<RegisteredServer> = this.cache.getServer(serverName)
+
+    override fun getServersByTag(tag: String): List<RegisteredServer> = this.cache.listServersByTag(tag)
+
+    override fun registerExternalServer(
+        name: String,
+        address: String,
+        tags: List<String>,
+        maxPlayers: Int,
+    ) {
+        this.cache.registerExternalServer(name, address, tags, maxPlayers)
+    }
+
+    override fun unregisterExternalServer(name: String) {
+        this.cache.unregisterExternalServer(name)
+    }
+
+    override fun updateServerAcceptingPlayers(
+        serverName: String,
+        acceptingPlayers: Boolean,
+    ) {
+        this.cache.updateServerAcceptingPlayers(serverName, acceptingPlayers)
     }
 }

@@ -1,11 +1,14 @@
 package io.shulkermc.cluster.api;
 
 import io.shulkermc.cluster.api.data.PlayerPosition;
+import io.shulkermc.cluster.api.data.RegisteredProxy;
+import io.shulkermc.cluster.api.data.RegisteredServer;
 import io.shulkermc.cluster.api.messaging.MessagingBus;
 import io.shulkermc.sdk.ShulkerSDK;
 import net.kyori.adventure.text.Component;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -146,4 +149,90 @@ public abstract class ShulkerClusterAPI {
      * @return The related username, if existing
      */
     abstract public @NotNull Optional<@NotNull String> getPlayerNameFromId(@NotNull UUID playerId);
+
+    /**
+     * Lists every proxy currently registered in the cluster cache.
+     *
+     * @return Snapshot of all registered proxies
+     */
+    abstract public @NotNull List<@NotNull RegisteredProxy> listProxies();
+
+    /**
+     * Retrieves a registered proxy by its identifier.
+     *
+     * @param proxyName Proxy identifier
+     * @return The proxy if present in the cache
+     */
+    abstract public @NotNull Optional<@NotNull RegisteredProxy> getProxyById(@NotNull String proxyName);
+
+    /**
+     * Lists proxies that carry the provided tag.
+     *
+     * @param tag Tag to filter on
+     * @return Matching proxies
+     */
+    abstract public @NotNull List<@NotNull RegisteredProxy> getProxiesByTag(@NotNull String tag);
+
+    /**
+     * Lists every Minecraft server currently registered in the cluster cache,
+     * including empty servers and external servers.
+     *
+     * @return Snapshot of all registered servers
+     */
+    abstract public @NotNull List<@NotNull RegisteredServer> listServers();
+
+    /**
+     * Retrieves a registered server by its identifier.
+     *
+     * @param serverName Server identifier
+     * @return The server if present in the cache
+     */
+    abstract public @NotNull Optional<@NotNull RegisteredServer> getServerById(@NotNull String serverName);
+
+    /**
+     * Lists servers that carry the provided tag.
+     * Useful for lobby menus, matchmaking, etc.
+     *
+     * @param tag Tag to filter on (e.g. {@code lobby})
+     * @return Matching servers
+     */
+    abstract public @NotNull List<@NotNull RegisteredServer> getServersByTag(@NotNull String tag);
+
+    /**
+     * Registers (or updates) an external server in the cluster cache and
+     * notifies proxies so they can open a backend to it.
+     * <br>
+     * Redis is only a coordination layer: fleet-managed GameServers and
+     * external servers declared in the MinecraftCluster CR always take
+     * precedence over dynamically registered ones with the same name.
+     *
+     * @param name Server name as proxies should register it
+     * @param address Host:port of the backend
+     * @param tags Tags associated with the server
+     * @param maxPlayers Soft capacity advertised for this server
+     */
+    abstract public void registerExternalServer(
+            @NotNull String name,
+            @NotNull String address,
+            @NotNull List<@NotNull String> tags,
+            int maxPlayers
+    );
+
+    /**
+     * Removes a dynamically registered external server from the cache and
+     * notifies proxies. Does nothing if the name belongs to a managed or
+     * CR-declared external server.
+     *
+     * @param name Server name to remove
+     */
+    abstract public void unregisterExternalServer(@NotNull String name);
+
+    /**
+     * Updates whether a server accepts new players (e.g. game liquidation).
+     * No-op if the server is unknown.
+     *
+     * @param serverName Server identifier
+     * @param acceptingPlayers Whether new players may join
+     */
+    abstract public void updateServerAcceptingPlayers(@NotNull String serverName, boolean acceptingPlayers);
 }

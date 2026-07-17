@@ -28,8 +28,8 @@ class LostProxyPurgeTask(private val agent: ShulkerProxyAgentCommon) : Runnable 
                 this.agent.cluster.cache.listRegisteredProxies()
                     .filter { System.currentTimeMillis() - it.lastSeenAt.toEpochMilli() > PROXY_LOST_MILLIS_THRESHOLD }
                     .forEach { proxy ->
-                        this.agent.cluster.cache.unregisterProxy(proxy.proxyName)
-                        this.agent.logger.info("Unregistered lost proxy ${proxy.proxyName}")
+                        this.agent.cluster.cache.unregisterProxy(proxy.name)
+                        this.agent.logger.info("Unregistered lost proxy ${proxy.name}")
                     }
             }
         }

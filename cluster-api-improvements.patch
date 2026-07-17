@@ -1,0 +1,1453 @@
+diff --git a/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/ShulkerClusterAPIImpl.kt b/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/ShulkerClusterAPIImpl.kt
+index 2fce0f8..a2d0971 100644
+--- a/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/ShulkerClusterAPIImpl.kt
++++ b/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/ShulkerClusterAPIImpl.kt
+@@ -14,6 +14,8 @@ import io.shulkermc.cluster.api.adapters.mojang.MojangGatewayAdapter
+ import io.shulkermc.cluster.api.adapters.pubsub.RedisPubSubAdapter
+ import io.shulkermc.cluster.api.data.KubernetesObjectRef
+ import io.shulkermc.cluster.api.data.PlayerPosition
++import io.shulkermc.cluster.api.data.RegisteredProxy
++import io.shulkermc.cluster.api.data.RegisteredServer
+ import io.shulkermc.cluster.api.messaging.MessagingBus
+ import io.shulkermc.sdk.ShulkerSDK
+ import io.shulkermc.sdk.ShulkerSDKImpl
+@@ -145,4 +147,36 @@ class ShulkerClusterAPIImpl(val logger: Logger) : ShulkerClusterAPI(), Closeable
+ 
+         return Optional.empty()
+     }
++
++    override fun listProxies(): List<RegisteredProxy> = this.cache.listRegisteredProxies()
++
++    override fun getProxyById(proxyName: String): Optional<RegisteredProxy> = this.cache.getProxy(proxyName)
++
++    override fun getProxiesByTag(tag: String): List<RegisteredProxy> = this.cache.listProxiesByTag(tag)
++
++    override fun listServers(): List<RegisteredServer> = this.cache.listAllServers()
++
++    override fun getServerById(serverName: String): Optional<RegisteredServer> = this.cache.getServer(serverName)
++
++    override fun getServersByTag(tag: String): List<RegisteredServer> = this.cache.listServersByTag(tag)
++
++    override fun registerExternalServer(
++        name: String,
++        address: String,
++        tags: List<String>,
++        maxPlayers: Int,
++    ) {
++        this.cache.registerExternalServer(name, address, tags, maxPlayers)
++    }
++
++    override fun unregisterExternalServer(name: String) {
++        this.cache.unregisterExternalServer(name)
++    }
++
++    override fun updateServerAcceptingPlayers(
++        serverName: String,
++        acceptingPlayers: Boolean,
++    ) {
++        this.cache.updateServerAcceptingPlayers(serverName, acceptingPlayers)
++    }
+ }
+diff --git a/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/adapters/cache/CacheAdapter.kt b/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/adapters/cache/CacheAdapter.kt
+index 04ec3cd..16efaf4 100644
+--- a/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/adapters/cache/CacheAdapter.kt
++++ b/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/adapters/cache/CacheAdapter.kt
+@@ -2,25 +2,87 @@ package io.shulkermc.cluster.api.adapters.cache
+ 
+ import io.shulkermc.cluster.api.data.PlayerPosition
+ import io.shulkermc.cluster.api.data.RegisteredProxy
++import io.shulkermc.cluster.api.data.RegisteredServer
+ import java.util.Optional
+ import java.util.UUID
+ 
+ interface CacheAdapter {
++    // Proxies
++
+     fun registerProxy(
+         proxyName: String,
+         proxyCapacity: Int,
++        fleetName: String? = null,
++        tags: List<String> = emptyList(),
++        acceptingPlayers: Boolean = true,
+     )
+ 
+     fun unregisterProxy(proxyName: String)
+ 
+     fun updateProxyLastSeen(proxyName: String)
+ 
++    fun updateProxyAcceptingPlayers(
++        proxyName: String,
++        acceptingPlayers: Boolean,
++    )
++
+     fun listRegisteredProxies(): List<RegisteredProxy>
+ 
++    fun getProxy(proxyName: String): Optional<RegisteredProxy>
++
++    fun listProxiesByTag(tag: String): List<RegisteredProxy>
++
+     fun tryLockLostProxiesPurgeTask(ownerProxyName: String): Optional<Lock>
+ 
++    // Servers
++
++    /**
++     * Upserts server metadata in the cache. Empty servers are kept so that
++     * plugins can discover them without waiting for a first player.
++     *
++     * @param source managed | external-config | external-dynamic
++     */
++    fun registerServer(
++        name: String,
++        fleetName: String?,
++        tags: List<String>,
++        maxPlayers: Int = 0,
++        acceptingPlayers: Boolean? = null,
++        address: String? = null,
++        source: String = SOURCE_MANAGED,
++    )
++
+     fun unregisterServer(serverName: String)
+ 
++    fun updateServerAcceptingPlayers(
++        name: String,
++        acceptingPlayers: Boolean,
++    )
++
++    fun updateServerMaxPlayers(
++        name: String,
++        maxPlayers: Int,
++    )
++
++    fun listAllServers(): List<RegisteredServer>
++
++    fun listServersByTag(tag: String): List<RegisteredServer>
++
++    fun getServer(name: String): Optional<RegisteredServer>
++
++    fun registerExternalServer(
++        name: String,
++        address: String,
++        tags: List<String>,
++        maxPlayers: Int,
++    ): Boolean
++
++    fun unregisterExternalServer(name: String): Boolean
++
++    fun listExternalDynamicServers(): List<RegisteredServer>
++
++    // Players
++
+     fun listPlayersInServer(serverName: String): List<UUID>
+ 
+     fun setPlayerPosition(
+@@ -51,4 +113,10 @@ interface CacheAdapter {
+     fun countPlayerCapacity(): Int
+ 
+     interface Lock : AutoCloseable
++
++    companion object {
++        const val SOURCE_MANAGED = "managed"
++        const val SOURCE_EXTERNAL_CONFIG = "external-config"
++        const val SOURCE_EXTERNAL_DYNAMIC = "external-dynamic"
++    }
+ }
+diff --git a/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/adapters/cache/RedisCacheAdapter.kt b/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/adapters/cache/RedisCacheAdapter.kt
+index df91925..a4a0ed4 100644
+--- a/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/adapters/cache/RedisCacheAdapter.kt
++++ b/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/adapters/cache/RedisCacheAdapter.kt
+@@ -2,12 +2,34 @@ package io.shulkermc.cluster.api.adapters.cache
+ 
+ import io.shulkermc.cluster.api.data.PlayerPosition
+ import io.shulkermc.cluster.api.data.RegisteredProxy
++import io.shulkermc.cluster.api.data.RegisteredServer
++import redis.clients.jedis.Jedis
+ import redis.clients.jedis.JedisPool
+ import redis.clients.jedis.params.SetParams
+ import java.time.Instant
+ import java.util.Optional
+ import java.util.UUID
+ 
++/**
++ * Unified Redis layout (no duplicated player membership):
++ *
++ * ```
++ * shulker:proxies                         SET  proxy names
++ * shulker:proxies:info:{name}             HASH capacity, lastSeen, acceptingPlayers, fleetName, tags
++ * shulker:proxies:by-tag:{tag}            SET  proxy names
++ *
++ * shulker:servers                         SET  server names
++ * shulker:servers:info:{name}             HASH capacity, fleetName, tags, address, source, acceptingPlayers, lastUpdated
++ * shulker:servers:by-tag:{tag}            SET  server names
++ * shulker:servers:external-dynamic        SET  dynamically registered external servers
++ *
++ * shulker:players:position                HASH playerId → "proxyName|serverName"   (sole player presence)
++ *
++ * shulker:uuid-cache:id-to-name:{id}      STRING (TTL)
++ * shulker:uuid-cache:name-to-id:{name}    STRING (TTL)
++ * shulker:locks:...                       STRING (TTL)
++ * ```
++ */
+ class RedisCacheAdapter(private val jedisPool: JedisPool) : CacheAdapter {
+     companion object {
+         private const val PROXY_LOST_PURGE_LOCK_SECONDS = 15L
+@@ -15,180 +37,368 @@ class RedisCacheAdapter(private val jedisPool: JedisPool) : CacheAdapter {
+ 
+         private const val KEY_PREFIX = "shulker"
+ 
+-        // Proxy keys
+-        private const val PROXIES_KEY_PREFIX = "$KEY_PREFIX:proxies"
+-        private const val PROXIES_SET_KEY = PROXIES_KEY_PREFIX
+-        private const val PROXIES_CAPACITY_HASH_KEY = "$PROXIES_KEY_PREFIX:capacity"
+-        private const val PROXIES_LAST_SEEN_HASH_KEY = "$PROXIES_KEY_PREFIX:last-seen"
+-        private val PROXIES_PLAYERS_SET_KEY = { proxyName: String -> "$PROXIES_KEY_PREFIX:$proxyName:players" }
++        // Proxies
++        private const val PROXIES_SET_KEY = "$KEY_PREFIX:proxies"
++        private val PROXIES_INFO_HASH_KEY = { name: String -> "$KEY_PREFIX:proxies:info:$name" }
++        private val PROXIES_BY_TAG_SET_KEY = { tag: String -> "$KEY_PREFIX:proxies:by-tag:$tag" }
+ 
+-        // Server keys
+-        private const val SERVERS_KEY_PREFIX = "$KEY_PREFIX:servers"
+-        private val SERVERS_PLAYERS_SET_KEY = { serverName: String -> "$SERVERS_KEY_PREFIX:$serverName:players" }
++        // Servers
++        private const val SERVERS_SET_KEY = "$KEY_PREFIX:servers"
++        private const val SERVERS_EXTERNAL_DYNAMIC_SET_KEY = "$KEY_PREFIX:servers:external-dynamic"
++        private val SERVERS_INFO_HASH_KEY = { name: String -> "$KEY_PREFIX:servers:info:$name" }
++        private val SERVERS_BY_TAG_SET_KEY = { tag: String -> "$KEY_PREFIX:servers:by-tag:$tag" }
+ 
+-        // Player keys
+-        private const val PLAYERS_KEY_PREFIX = "$KEY_PREFIX:players"
+-        private const val PLAYERS_ONLINE_SET_KEY = "$PLAYERS_KEY_PREFIX:online"
+-        private const val PLAYERS_CURRENT_PROXY_HASH_KEY = "$PLAYERS_KEY_PREFIX:current-proxy"
+-        private const val PLAYERS_CURRENT_SERVER_HASH_KEY = "$PLAYERS_KEY_PREFIX:current-server"
++        // Players — single source of truth for online presence + location
++        private const val PLAYERS_POSITION_HASH_KEY = "$KEY_PREFIX:players:position"
+ 
+-        // UUID cache keys
++        // UUID name cache (Mojang lookups, unrelated to online presence)
+         private const val UUID_CACHE_KEY_PREFIX = "$KEY_PREFIX:uuid-cache"
+         private val UUID_CACHE_NAME_TO_ID_KEY = { name: String -> "$UUID_CACHE_KEY_PREFIX:name-to-id:$name" }
+         private val UUID_CACHE_ID_TO_NAME_KEY = { id: String -> "$UUID_CACHE_KEY_PREFIX:id-to-name:$id" }
+ 
+-        // Lock keys
+-        private const val LOCKS_KEY_PREFIX = "$KEY_PREFIX:locks"
+-        private const val LOCKS_LOST_PROXIES_PURGE_KEY = "$LOCKS_KEY_PREFIX:lost-proxies-purge"
++        // Locks
++        private const val LOCKS_LOST_PROXIES_PURGE_KEY = "$KEY_PREFIX:locks:lost-proxies-purge"
++
++        // Pub/Sub
++        const val SERVER_UPDATED_CHANNEL = "$KEY_PREFIX:events:server-updated"
++        const val EXTERNAL_SERVER_REGISTER_CHANNEL = "$KEY_PREFIX:events:external-server-register"
++        const val EXTERNAL_SERVER_UNREGISTER_CHANNEL = "$KEY_PREFIX:events:external-server-unregister"
++
++        // Info hash fields (shared naming for proxies & servers where applicable)
++        private const val FIELD_CAPACITY = "capacity"
++        private const val FIELD_LAST_SEEN = "lastSeen"
++        private const val FIELD_ACCEPTING_PLAYERS = "acceptingPlayers"
++        private const val FIELD_FLEET_NAME = "fleetName"
++        private const val FIELD_TAGS = "tags"
++        private const val FIELD_ADDRESS = "address"
++        private const val FIELD_SOURCE = "source"
++        private const val FIELD_LAST_UPDATED = "lastUpdated"
++
++        private const val POSITION_SEPARATOR = "|"
+     }
+ 
++    // ==================== Proxies ====================
++
+     override fun registerProxy(
+         proxyName: String,
+         proxyCapacity: Int,
++        fleetName: String?,
++        tags: List<String>,
++        acceptingPlayers: Boolean,
+     ) {
+         this.jedisPool.resource.use { jedis ->
++            val infoKey = PROXIES_INFO_HASH_KEY(proxyName)
++            val previousTags = parseTags(jedis.hget(infoKey, FIELD_TAGS))
++
+             val pipeline = jedis.pipelined()
+             pipeline.sadd(PROXIES_SET_KEY, proxyName)
+-            pipeline.hset(PROXIES_CAPACITY_HASH_KEY, proxyName, proxyCapacity.toString())
+-            pipeline.hset(PROXIES_LAST_SEEN_HASH_KEY, proxyName, System.currentTimeMillis().toString())
++            pipeline.hset(
++                infoKey,
++                mapOf(
++                    FIELD_CAPACITY to proxyCapacity.toString(),
++                    FIELD_LAST_SEEN to System.currentTimeMillis().toString(),
++                    FIELD_ACCEPTING_PLAYERS to acceptingPlayers.toString(),
++                    FIELD_FLEET_NAME to fleetName.orEmpty(),
++                    FIELD_TAGS to tags.joinToString(","),
++                ),
++            )
++            previousTags.forEach { tag -> pipeline.srem(PROXIES_BY_TAG_SET_KEY(tag), proxyName) }
++            tags.forEach { tag -> pipeline.sadd(PROXIES_BY_TAG_SET_KEY(tag), proxyName) }
+             pipeline.sync()
+         }
+     }
+ 
+     override fun unregisterProxy(proxyName: String) {
+         this.jedisPool.resource.use { jedis ->
+-            val playersRedisKey = PROXIES_PLAYERS_SET_KEY(proxyName)
+-            val playerIds = jedis.smembers(playersRedisKey)
++            val infoKey = PROXIES_INFO_HASH_KEY(proxyName)
++            val previousTags = parseTags(jedis.hget(infoKey, FIELD_TAGS))
++            val playersOnProxy = playersOnProxy(jedis, proxyName)
+ 
+             val pipeline = jedis.pipelined()
+             pipeline.srem(PROXIES_SET_KEY, proxyName)
+-            pipeline.hdel(PROXIES_CAPACITY_HASH_KEY, proxyName)
+-            pipeline.hdel(PROXIES_LAST_SEEN_HASH_KEY, proxyName)
+-            pipeline.del(playersRedisKey)
++            pipeline.del(infoKey)
++            previousTags.forEach { tag -> pipeline.srem(PROXIES_BY_TAG_SET_KEY(tag), proxyName) }
++            playersOnProxy.forEach { playerId -> pipeline.hdel(PLAYERS_POSITION_HASH_KEY, playerId) }
+             pipeline.sync()
+-
+-            val playerPipeline = jedis.pipelined()
+-            playerIds.forEach { playerId ->
+-                playerPipeline.srem(PLAYERS_ONLINE_SET_KEY, playerId)
+-                playerPipeline.hdel(PLAYERS_CURRENT_PROXY_HASH_KEY, playerId)
+-                playerPipeline.hdel(PLAYERS_CURRENT_SERVER_HASH_KEY, playerId)
+-            }
+-            playerPipeline.sync()
+         }
+     }
+ 
+     override fun updateProxyLastSeen(proxyName: String) {
+         this.jedisPool.resource.use { jedis ->
+-            jedis.hset(PROXIES_LAST_SEEN_HASH_KEY, proxyName, System.currentTimeMillis().toString())
++            if (!jedis.sismember(PROXIES_SET_KEY, proxyName)) {
++                return
++            }
++            jedis.hset(PROXIES_INFO_HASH_KEY(proxyName), FIELD_LAST_SEEN, System.currentTimeMillis().toString())
+         }
+     }
+ 
+-    override fun listRegisteredProxies(): List<RegisteredProxy> {
++    override fun updateProxyAcceptingPlayers(
++        proxyName: String,
++        acceptingPlayers: Boolean,
++    ) {
+         this.jedisPool.resource.use { jedis ->
+-            val registeredProxies = jedis.smembers(PROXIES_SET_KEY)
+-            val capacities = jedis.hgetAll(PROXIES_CAPACITY_HASH_KEY)
+-            val lastSeenMillis = jedis.hgetAll(PROXIES_LAST_SEEN_HASH_KEY)
+-
+-            return registeredProxies.map { proxyName ->
+-                val capacity = capacities[proxyName]?.toInt() ?: 0
+-                val lastSeen = lastSeenMillis[proxyName]?.toLong()?.let(Instant::ofEpochMilli) ?: Instant.now()
+-                RegisteredProxy(proxyName, capacity, lastSeen)
++            if (!jedis.sismember(PROXIES_SET_KEY, proxyName)) {
++                return
+             }
++            jedis.hset(PROXIES_INFO_HASH_KEY(proxyName), FIELD_ACCEPTING_PLAYERS, acceptingPlayers.toString())
+         }
+     }
+ 
+-    override fun tryLockLostProxiesPurgeTask(ownerProxyName: String): Optional<CacheAdapter.Lock> =
+-        this.tryLock(ownerProxyName, LOCKS_LOST_PROXIES_PURGE_KEY, PROXY_LOST_PURGE_LOCK_SECONDS)
+-
+-    override fun unregisterServer(serverName: String) {
++    override fun listRegisteredProxies(): List<RegisteredProxy> {
+         this.jedisPool.resource.use { jedis ->
+-            jedis.del(SERVERS_PLAYERS_SET_KEY(serverName))
++            return jedis.smembers(PROXIES_SET_KEY).mapNotNull { buildRegisteredProxy(jedis, it) }
+         }
+     }
+ 
+-    override fun listPlayersInServer(serverName: String): List<UUID> {
++    override fun getProxy(proxyName: String): Optional<RegisteredProxy> {
+         this.jedisPool.resource.use { jedis ->
+-            val playerIds = jedis.smembers(SERVERS_PLAYERS_SET_KEY(serverName))
+-            return playerIds.map(UUID::fromString)
++            return Optional.ofNullable(buildRegisteredProxy(jedis, proxyName))
+         }
+     }
+ 
+-    override fun setPlayerPosition(
+-        playerId: UUID,
+-        proxyName: String,
+-        serverName: String,
+-    ) {
++    override fun listProxiesByTag(tag: String): List<RegisteredProxy> {
+         this.jedisPool.resource.use { jedis ->
+-            val playerIdString = playerId.toString()
+-            val oldProxyName = jedis.hget(PLAYERS_CURRENT_PROXY_HASH_KEY, playerIdString)
+-            val oldServerName = jedis.hget(PLAYERS_CURRENT_SERVER_HASH_KEY, playerIdString)
++            return jedis.smembers(PROXIES_BY_TAG_SET_KEY(tag)).mapNotNull { buildRegisteredProxy(jedis, it) }
++        }
++    }
+ 
+-            val pipeline = jedis.pipelined()
+-            pipeline.sadd(PLAYERS_ONLINE_SET_KEY, playerIdString)
+-            pipeline.hset(PLAYERS_CURRENT_PROXY_HASH_KEY, playerIdString, proxyName)
+-            pipeline.hset(PLAYERS_CURRENT_SERVER_HASH_KEY, playerIdString, serverName)
++    override fun tryLockLostProxiesPurgeTask(ownerProxyName: String): Optional<CacheAdapter.Lock> =
++        this.tryLock(ownerProxyName, LOCKS_LOST_PROXIES_PURGE_KEY, PROXY_LOST_PURGE_LOCK_SECONDS)
++
++    // ==================== Servers ====================
+ 
+-            if (oldProxyName != null) {
+-                pipeline.srem(PROXIES_PLAYERS_SET_KEY(oldProxyName), playerIdString)
++    override fun registerServer(
++        name: String,
++        fleetName: String?,
++        tags: List<String>,
++        maxPlayers: Int,
++        acceptingPlayers: Boolean?,
++        address: String?,
++        source: String,
++    ) {
++        this.jedisPool.resource.use { jedis ->
++            val infoKey = SERVERS_INFO_HASH_KEY(name)
++            val existing = jedis.hgetAll(infoKey)
++            val existingSource = existing[FIELD_SOURCE]
++
++            if (
++                existingSource != null &&
++                source == CacheAdapter.SOURCE_EXTERNAL_DYNAMIC &&
++                existingSource != CacheAdapter.SOURCE_EXTERNAL_DYNAMIC
++            ) {
++                return
+             }
+-            pipeline.sadd(PROXIES_PLAYERS_SET_KEY(proxyName), playerIdString)
+ 
+-            if (oldServerName != null) {
+-                pipeline.srem(SERVERS_PLAYERS_SET_KEY(oldServerName), playerIdString)
++            val previousTags = parseTags(existing[FIELD_TAGS])
++            val existingCapacity = existing[FIELD_CAPACITY]?.toIntOrNull() ?: 0
++            val effectiveCapacity = if (maxPlayers > 0) maxPlayers else existingCapacity
++            val effectiveAccepting =
++                acceptingPlayers
++                    ?: existing[FIELD_ACCEPTING_PLAYERS]?.toBooleanStrictOrNull()
++                    ?: true
++            val effectiveFleet = fleetName ?: existing[FIELD_FLEET_NAME]?.takeIf { it.isNotBlank() }
++            val effectiveTags = tags.ifEmpty { previousTags }
++            val effectiveAddress = address ?: existing[FIELD_ADDRESS]
++
++            val fields =
++                mutableMapOf(
++                    FIELD_CAPACITY to effectiveCapacity.toString(),
++                    FIELD_FLEET_NAME to effectiveFleet.orEmpty(),
++                    FIELD_TAGS to effectiveTags.joinToString(","),
++                    FIELD_ACCEPTING_PLAYERS to effectiveAccepting.toString(),
++                    FIELD_SOURCE to source,
++                    FIELD_LAST_UPDATED to System.currentTimeMillis().toString(),
++                )
++            if (effectiveAddress != null) {
++                fields[FIELD_ADDRESS] = effectiveAddress
+             }
+-            pipeline.sadd(SERVERS_PLAYERS_SET_KEY(serverName), playerIdString)
+ 
++            val pipeline = jedis.pipelined()
++            pipeline.sadd(SERVERS_SET_KEY, name)
++            if (source == CacheAdapter.SOURCE_EXTERNAL_DYNAMIC) {
++                pipeline.sadd(SERVERS_EXTERNAL_DYNAMIC_SET_KEY, name)
++            } else {
++                pipeline.srem(SERVERS_EXTERNAL_DYNAMIC_SET_KEY, name)
++            }
++            pipeline.hset(infoKey, fields)
++            previousTags.forEach { tag -> pipeline.srem(SERVERS_BY_TAG_SET_KEY(tag), name) }
++            effectiveTags.forEach { tag -> pipeline.sadd(SERVERS_BY_TAG_SET_KEY(tag), name) }
+             pipeline.sync()
++
++            jedis.publish(SERVER_UPDATED_CHANNEL, name)
+         }
+     }
+ 
+-    override fun unsetPlayerPosition(playerId: UUID) {
++    override fun unregisterServer(serverName: String) {
+         this.jedisPool.resource.use { jedis ->
+-            val playerIdString = playerId.toString()
+-            val currentProxyName = jedis.hget(PLAYERS_CURRENT_PROXY_HASH_KEY, playerIdString)
+-            val currentServerName = jedis.hget(PLAYERS_CURRENT_SERVER_HASH_KEY, playerIdString)
++            val infoKey = SERVERS_INFO_HASH_KEY(serverName)
++            val previousTags = parseTags(jedis.hget(infoKey, FIELD_TAGS))
+ 
+             val pipeline = jedis.pipelined()
+-            pipeline.srem(PLAYERS_ONLINE_SET_KEY, playerIdString)
+-            pipeline.hdel(PLAYERS_CURRENT_PROXY_HASH_KEY, playerIdString)
+-            pipeline.hdel(PLAYERS_CURRENT_SERVER_HASH_KEY, playerIdString)
++            pipeline.srem(SERVERS_SET_KEY, serverName)
++            pipeline.srem(SERVERS_EXTERNAL_DYNAMIC_SET_KEY, serverName)
++            previousTags.forEach { tag -> pipeline.srem(SERVERS_BY_TAG_SET_KEY(tag), serverName) }
++            pipeline.del(infoKey)
++            pipeline.sync()
++
++            jedis.publish(SERVER_UPDATED_CHANNEL, serverName)
++        }
++    }
+ 
+-            if (currentProxyName != null) {
+-                pipeline.srem(PROXIES_PLAYERS_SET_KEY(currentProxyName), playerIdString)
++    override fun updateServerAcceptingPlayers(
++        name: String,
++        acceptingPlayers: Boolean,
++    ) {
++        this.jedisPool.resource.use { jedis ->
++            val infoKey = SERVERS_INFO_HASH_KEY(name)
++            if (!jedis.exists(infoKey)) {
++                return
+             }
++            jedis.hset(
++                infoKey,
++                mapOf(
++                    FIELD_ACCEPTING_PLAYERS to acceptingPlayers.toString(),
++                    FIELD_LAST_UPDATED to System.currentTimeMillis().toString(),
++                ),
++            )
++            jedis.publish(SERVER_UPDATED_CHANNEL, name)
++        }
++    }
+ 
+-            if (currentServerName != null) {
+-                pipeline.srem(SERVERS_PLAYERS_SET_KEY(currentServerName), playerIdString)
++    override fun updateServerMaxPlayers(
++        name: String,
++        maxPlayers: Int,
++    ) {
++        this.jedisPool.resource.use { jedis ->
++            val infoKey = SERVERS_INFO_HASH_KEY(name)
++            if (!jedis.exists(infoKey)) {
++                return
+             }
++            jedis.hset(infoKey, FIELD_CAPACITY, maxPlayers.toString())
++        }
++    }
+ 
+-            pipeline.sync()
++    override fun listAllServers(): List<RegisteredServer> {
++        this.jedisPool.resource.use { jedis ->
++            val playerCounts = countPlayersByServer(jedis)
++            return jedis.smembers(SERVERS_SET_KEY).mapNotNull { buildRegisteredServer(jedis, it, playerCounts) }
+         }
+     }
+ 
+-    override fun getPlayerPosition(playerId: UUID): Optional<PlayerPosition> {
++    override fun listServersByTag(tag: String): List<RegisteredServer> {
+         this.jedisPool.resource.use { jedis ->
+-            val playerIdString = playerId.toString()
++            val playerCounts = countPlayersByServer(jedis)
++            return jedis.smembers(SERVERS_BY_TAG_SET_KEY(tag)).mapNotNull { buildRegisteredServer(jedis, it, playerCounts) }
++        }
++    }
+ 
+-            val pipeline = jedis.pipelined()
+-            val proxyNameResponse = pipeline.hget(PLAYERS_CURRENT_PROXY_HASH_KEY, playerIdString)
+-            val serverNameResponse = pipeline.hget(PLAYERS_CURRENT_SERVER_HASH_KEY, playerIdString)
+-            pipeline.sync()
++    override fun getServer(name: String): Optional<RegisteredServer> {
++        this.jedisPool.resource.use { jedis ->
++            return Optional.ofNullable(buildRegisteredServer(jedis, name, countPlayersByServer(jedis)))
++        }
++    }
+ 
+-            if (proxyNameResponse != null && serverNameResponse != null) {
+-                val proxyName = proxyNameResponse.get()
+-                val serverName = serverNameResponse.get()
+-                return Optional.of(PlayerPosition(proxyName, serverName))
+-            } else {
+-                this.unsetPlayerPosition(playerId)
++    override fun registerExternalServer(
++        name: String,
++        address: String,
++        tags: List<String>,
++        maxPlayers: Int,
++    ): Boolean {
++        this.jedisPool.resource.use { jedis ->
++            val existingSource = jedis.hget(SERVERS_INFO_HASH_KEY(name), FIELD_SOURCE)
++            if (
++                existingSource != null &&
++                existingSource != CacheAdapter.SOURCE_EXTERNAL_DYNAMIC
++            ) {
++                return false
+             }
++        }
+ 
+-            return Optional.empty()
++        this.registerServer(
++            name = name,
++            fleetName = null,
++            tags = tags,
++            maxPlayers = maxPlayers,
++            acceptingPlayers = true,
++            address = address,
++            source = CacheAdapter.SOURCE_EXTERNAL_DYNAMIC,
++        )
++
++        this.jedisPool.resource.use { jedis ->
++            jedis.publish(EXTERNAL_SERVER_REGISTER_CHANNEL, name)
++        }
++        return true
++    }
++
++    override fun unregisterExternalServer(name: String): Boolean {
++        this.jedisPool.resource.use { jedis ->
++            val source = jedis.hget(SERVERS_INFO_HASH_KEY(name), FIELD_SOURCE)
++            if (source != CacheAdapter.SOURCE_EXTERNAL_DYNAMIC) {
++                return false
++            }
++        }
++
++        this.unregisterServer(name)
++        this.jedisPool.resource.use { jedis ->
++            jedis.publish(EXTERNAL_SERVER_UNREGISTER_CHANNEL, name)
++        }
++        return true
++    }
++
++    override fun listExternalDynamicServers(): List<RegisteredServer> {
++        this.jedisPool.resource.use { jedis ->
++            val playerCounts = countPlayersByServer(jedis)
++            return jedis.smembers(SERVERS_EXTERNAL_DYNAMIC_SET_KEY)
++                .mapNotNull { buildRegisteredServer(jedis, it, playerCounts) }
++        }
++    }
++
++    // ==================== Players ====================
++
++    override fun listPlayersInServer(serverName: String): List<UUID> {
++        this.jedisPool.resource.use { jedis ->
++            return jedis.hgetAll(PLAYERS_POSITION_HASH_KEY)
++                .mapNotNull { (playerId, position) ->
++                    val parsed = parsePosition(position) ?: return@mapNotNull null
++                    if (parsed.second == serverName) UUID.fromString(playerId) else null
++                }
++        }
++    }
++
++    override fun setPlayerPosition(
++        playerId: UUID,
++        proxyName: String,
++        serverName: String,
++    ) {
++        this.jedisPool.resource.use { jedis ->
++            jedis.hset(
++                PLAYERS_POSITION_HASH_KEY,
++                playerId.toString(),
++                encodePosition(proxyName, serverName),
++            )
++        }
++    }
++
++    override fun unsetPlayerPosition(playerId: UUID) {
++        this.jedisPool.resource.use { jedis ->
++            jedis.hdel(PLAYERS_POSITION_HASH_KEY, playerId.toString())
++        }
++    }
++
++    override fun getPlayerPosition(playerId: UUID): Optional<PlayerPosition> {
++        this.jedisPool.resource.use { jedis ->
++            val raw = jedis.hget(PLAYERS_POSITION_HASH_KEY, playerId.toString()) ?: return Optional.empty()
++            val parsed = parsePosition(raw) ?: run {
++                jedis.hdel(PLAYERS_POSITION_HASH_KEY, playerId.toString())
++                return Optional.empty()
++            }
++            return Optional.of(PlayerPosition(parsed.first, parsed.second))
+         }
+     }
+ 
+     override fun isPlayerConnected(playerId: UUID): Boolean {
+         this.jedisPool.resource.use { jedis ->
+-            return jedis.sismember(PLAYERS_ONLINE_SET_KEY, playerId.toString())
++            return jedis.hexists(PLAYERS_POSITION_HASH_KEY, playerId.toString())
+         }
+     }
+ 
+@@ -225,22 +435,116 @@ class RedisCacheAdapter(private val jedisPool: JedisPool) : CacheAdapter {
+             val responses = playerIds.associateWith { uuid -> pipeline.get(UUID_CACHE_ID_TO_NAME_KEY(uuid.toString())) }
+             pipeline.sync()
+ 
+-            return responses.mapValues { (_, response) -> response.get() }
++            return responses.mapNotNull { (uuid, response) ->
++                val name = response.get() ?: return@mapNotNull null
++                uuid to name
++            }.toMap()
+         }
+     }
+ 
+     override fun countOnlinePlayers(): Int {
+         this.jedisPool.resource.use { jedis ->
+-            return jedis.scard(PLAYERS_ONLINE_SET_KEY).toInt()
++            return jedis.hlen(PLAYERS_POSITION_HASH_KEY).toInt()
+         }
+     }
+ 
+     override fun countPlayerCapacity(): Int {
+         this.jedisPool.resource.use { jedis ->
+-            return jedis.hgetAll(PROXIES_CAPACITY_HASH_KEY).values.sumOf { it.toInt() }
++            return jedis.smembers(PROXIES_SET_KEY).sumOf { proxyName ->
++                jedis.hget(PROXIES_INFO_HASH_KEY(proxyName), FIELD_CAPACITY)?.toIntOrNull() ?: 0
++            }
++        }
++    }
++
++    // ==================== Builders ====================
++
++    private fun buildRegisteredProxy(
++        jedis: Jedis,
++        name: String,
++    ): RegisteredProxy? {
++        if (!jedis.sismember(PROXIES_SET_KEY, name)) {
++            return null
++        }
++
++        val info = jedis.hgetAll(PROXIES_INFO_HASH_KEY(name))
++        if (info.isEmpty()) {
++            return null
++        }
++
++        return RegisteredProxy(
++            name,
++            info[FIELD_CAPACITY]?.toIntOrNull() ?: 0,
++            info[FIELD_LAST_SEEN]?.toLongOrNull()?.let(Instant::ofEpochMilli) ?: Instant.now(),
++            info[FIELD_FLEET_NAME]?.takeIf { it.isNotBlank() },
++            parseTags(info[FIELD_TAGS]),
++            info[FIELD_ACCEPTING_PLAYERS]?.toBooleanStrictOrNull() ?: true,
++        )
++    }
++
++    private fun buildRegisteredServer(
++        jedis: Jedis,
++        name: String,
++        playerCountsByServer: Map<String, Int>,
++    ): RegisteredServer? {
++        val info = jedis.hgetAll(SERVERS_INFO_HASH_KEY(name))
++        if (info.isEmpty()) {
++            return null
++        }
++
++        val source = info[FIELD_SOURCE] ?: CacheAdapter.SOURCE_MANAGED
++
++        return RegisteredServer(
++            name,
++            info[FIELD_FLEET_NAME]?.takeIf { it.isNotBlank() },
++            parseTags(info[FIELD_TAGS]),
++            info[FIELD_ADDRESS]?.takeIf { it.isNotBlank() },
++            info[FIELD_CAPACITY]?.toIntOrNull() ?: 0,
++            playerCountsByServer[name] ?: 0,
++            info[FIELD_ACCEPTING_PLAYERS]?.toBooleanStrictOrNull() ?: true,
++            source != CacheAdapter.SOURCE_MANAGED,
++            info[FIELD_LAST_UPDATED]?.toLongOrNull()?.let(Instant::ofEpochMilli) ?: Instant.now(),
++        )
++    }
++
++    private fun countPlayersByServer(jedis: Jedis): Map<String, Int> {
++        val counts = HashMap<String, Int>()
++        jedis.hgetAll(PLAYERS_POSITION_HASH_KEY).values.forEach { raw ->
++            val serverName = parsePosition(raw)?.second ?: return@forEach
++            counts[serverName] = (counts[serverName] ?: 0) + 1
++        }
++        return counts
++    }
++
++    private fun playersOnProxy(
++        jedis: Jedis,
++        proxyName: String,
++    ): List<String> =
++        jedis.hgetAll(PLAYERS_POSITION_HASH_KEY)
++            .mapNotNull { (playerId, position) ->
++                val parsed = parsePosition(position) ?: return@mapNotNull null
++                if (parsed.first == proxyName) playerId else null
++            }
++
++    private fun encodePosition(
++        proxyName: String,
++        serverName: String,
++    ): String = "$proxyName$POSITION_SEPARATOR$serverName"
++
++    private fun parsePosition(raw: String): Pair<String, String>? {
++        val separatorIndex = raw.indexOf(POSITION_SEPARATOR)
++        if (separatorIndex <= 0 || separatorIndex >= raw.length - 1) {
++            return null
+         }
++        return raw.substring(0, separatorIndex) to raw.substring(separatorIndex + 1)
+     }
+ 
++    private fun parseTags(raw: String?): List<String> =
++        raw
++            ?.split(",")
++            ?.map { it.trim() }
++            ?.filter { it.isNotEmpty() }
++            ?: emptyList()
++
+     private fun tryLock(
+         ownerProxyName: String,
+         key: String,
+diff --git a/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/data/RegisteredProxy.kt b/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/data/RegisteredProxy.kt
+deleted file mode 100644
+index a5f0273..0000000
+--- a/packages/shulker-cluster-api-impl/src/main/kotlin/io/shulkermc/cluster/api/data/RegisteredProxy.kt
++++ /dev/null
+@@ -1,5 +0,0 @@
+-package io.shulkermc.cluster.api.data
+-
+-import java.time.Instant
+-
+-data class RegisteredProxy(val proxyName: String, val proxyCapacity: Int, val lastSeenAt: Instant)
+diff --git a/packages/shulker-cluster-api/src/main/java/io/shulkermc/cluster/api/ShulkerClusterAPI.java b/packages/shulker-cluster-api/src/main/java/io/shulkermc/cluster/api/ShulkerClusterAPI.java
+index f130578..f115ed0 100644
+--- a/packages/shulker-cluster-api/src/main/java/io/shulkermc/cluster/api/ShulkerClusterAPI.java
++++ b/packages/shulker-cluster-api/src/main/java/io/shulkermc/cluster/api/ShulkerClusterAPI.java
+@@ -1,11 +1,14 @@
+ package io.shulkermc.cluster.api;
+ 
+ import io.shulkermc.cluster.api.data.PlayerPosition;
++import io.shulkermc.cluster.api.data.RegisteredProxy;
++import io.shulkermc.cluster.api.data.RegisteredServer;
+ import io.shulkermc.cluster.api.messaging.MessagingBus;
+ import io.shulkermc.sdk.ShulkerSDK;
+ import net.kyori.adventure.text.Component;
+ import org.jetbrains.annotations.NotNull;
+ 
++import java.util.List;
+ import java.util.Optional;
+ import java.util.UUID;
+ 
+@@ -146,4 +149,90 @@ public abstract class ShulkerClusterAPI {
+      * @return The related username, if existing
+      */
+     abstract public @NotNull Optional<@NotNull String> getPlayerNameFromId(@NotNull UUID playerId);
++
++    /**
++     * Lists every proxy currently registered in the cluster cache.
++     *
++     * @return Snapshot of all registered proxies
++     */
++    abstract public @NotNull List<@NotNull RegisteredProxy> listProxies();
++
++    /**
++     * Retrieves a registered proxy by its identifier.
++     *
++     * @param proxyName Proxy identifier
++     * @return The proxy if present in the cache
++     */
++    abstract public @NotNull Optional<@NotNull RegisteredProxy> getProxyById(@NotNull String proxyName);
++
++    /**
++     * Lists proxies that carry the provided tag.
++     *
++     * @param tag Tag to filter on
++     * @return Matching proxies
++     */
++    abstract public @NotNull List<@NotNull RegisteredProxy> getProxiesByTag(@NotNull String tag);
++
++    /**
++     * Lists every Minecraft server currently registered in the cluster cache,
++     * including empty servers and external servers.
++     *
++     * @return Snapshot of all registered servers
++     */
++    abstract public @NotNull List<@NotNull RegisteredServer> listServers();
++
++    /**
++     * Retrieves a registered server by its identifier.
++     *
++     * @param serverName Server identifier
++     * @return The server if present in the cache
++     */
++    abstract public @NotNull Optional<@NotNull RegisteredServer> getServerById(@NotNull String serverName);
++
++    /**
++     * Lists servers that carry the provided tag.
++     * Useful for lobby menus, matchmaking, etc.
++     *
++     * @param tag Tag to filter on (e.g. {@code lobby})
++     * @return Matching servers
++     */
++    abstract public @NotNull List<@NotNull RegisteredServer> getServersByTag(@NotNull String tag);
++
++    /**
++     * Registers (or updates) an external server in the cluster cache and
++     * notifies proxies so they can open a backend to it.
++     * <br>
++     * Redis is only a coordination layer: fleet-managed GameServers and
++     * external servers declared in the MinecraftCluster CR always take
++     * precedence over dynamically registered ones with the same name.
++     *
++     * @param name Server name as proxies should register it
++     * @param address Host:port of the backend
++     * @param tags Tags associated with the server
++     * @param maxPlayers Soft capacity advertised for this server
++     */
++    abstract public void registerExternalServer(
++            @NotNull String name,
++            @NotNull String address,
++            @NotNull List<@NotNull String> tags,
++            int maxPlayers
++    );
++
++    /**
++     * Removes a dynamically registered external server from the cache and
++     * notifies proxies. Does nothing if the name belongs to a managed or
++     * CR-declared external server.
++     *
++     * @param name Server name to remove
++     */
++    abstract public void unregisterExternalServer(@NotNull String name);
++
++    /**
++     * Updates whether a server accepts new players (e.g. game liquidation).
++     * No-op if the server is unknown.
++     *
++     * @param serverName Server identifier
++     * @param acceptingPlayers Whether new players may join
++     */
++    abstract public void updateServerAcceptingPlayers(@NotNull String serverName, boolean acceptingPlayers);
+ }
+diff --git a/packages/shulker-cluster-api/src/main/java/io/shulkermc/cluster/api/data/RegisteredProxy.java b/packages/shulker-cluster-api/src/main/java/io/shulkermc/cluster/api/data/RegisteredProxy.java
+new file mode 100644
+index 0000000..e565db5
+--- /dev/null
++++ b/packages/shulker-cluster-api/src/main/java/io/shulkermc/cluster/api/data/RegisteredProxy.java
+@@ -0,0 +1,26 @@
++package io.shulkermc.cluster.api.data;
++
++import org.jetbrains.annotations.NotNull;
++import org.jetbrains.annotations.Nullable;
++
++import java.time.Instant;
++import java.util.List;
++
++/**
++ * Snapshot of a proxy registered in the Shulker cluster cache.
++ *
++ * @param name Proxy identifier (usually the GameServer / pod name)
++ * @param capacity Maximum number of players this proxy accepts
++ * @param lastSeenAt Last heartbeat written by the proxy agent
++ * @param fleetName Owning ProxyFleet name, if any
++ * @param tags Tags associated with the proxy
++ * @param acceptingPlayers Whether the proxy currently accepts new connections
++ */
++public record RegisteredProxy(
++        @NotNull String name,
++        int capacity,
++        @NotNull Instant lastSeenAt,
++        @Nullable String fleetName,
++        @NotNull List<@NotNull String> tags,
++        boolean acceptingPlayers
++) {}
+diff --git a/packages/shulker-cluster-api/src/main/java/io/shulkermc/cluster/api/data/RegisteredServer.java b/packages/shulker-cluster-api/src/main/java/io/shulkermc/cluster/api/data/RegisteredServer.java
+new file mode 100644
+index 0000000..b25f018
+--- /dev/null
++++ b/packages/shulker-cluster-api/src/main/java/io/shulkermc/cluster/api/data/RegisteredServer.java
+@@ -0,0 +1,34 @@
++package io.shulkermc.cluster.api.data;
++
++import org.jetbrains.annotations.NotNull;
++import org.jetbrains.annotations.Nullable;
++
++import java.time.Instant;
++import java.util.List;
++
++/**
++ * Snapshot of a Minecraft server registered in the Shulker cluster cache.
++ * Includes fleet-managed GameServers and external servers.
++ *
++ * @param name Server identifier as known by proxies
++ * @param fleetName Owning MinecraftServerFleet name, if any
++ * @param tags Tags associated with the server (e.g. lobby, limbo)
++ * @param address Optional host:port of the server
++ * @param maxPlayers Per-instance capacity from MinecraftServer/Fleet {@code spec.config.maxPlayers}
++ *                   (stored in Redis like proxy capacity: {@code shulker:servers:capacity})
++ * @param currentPlayers Number of players currently on this server
++ * @param acceptingPlayers Whether the server accepts new players (not liquidating / draining)
++ * @param external Whether this server is external (not managed as a Shulker GameServer)
++ * @param lastUpdated Last time metadata was written to the cache
++ */
++public record RegisteredServer(
++        @NotNull String name,
++        @Nullable String fleetName,
++        @NotNull List<@NotNull String> tags,
++        @Nullable String address,
++        int maxPlayers,
++        int currentPlayers,
++        boolean acceptingPlayers,
++        boolean external,
++        @NotNull Instant lastUpdated
++) {}
+diff --git a/packages/shulker-operator/src/reconcilers/minecraft_server/gameserver.rs b/packages/shulker-operator/src/reconcilers/minecraft_server/gameserver.rs
+index d81596d..be479f8 100644
+--- a/packages/shulker-operator/src/reconcilers/minecraft_server/gameserver.rs
++++ b/packages/shulker-operator/src/reconcilers/minecraft_server/gameserver.rs
+@@ -496,6 +496,11 @@ impl<'a> GameServerBuilder {
+                 value: Some(minecraft_server.spec.config.lifecycle_strategy.to_string()),
+                 ..EnvVar::default()
+             },
++            EnvVar {
++                name: "SHULKER_SERVER_MAX_PLAYERS".to_string(),
++                value: Some(minecraft_server.spec.config.max_players.to_string()),
++                ..EnvVar::default()
++            },
+             EnvVar {
+                 name: "EULA".to_string(),
+                 value: Some("TRUE".to_string()),
+diff --git a/packages/shulker-operator/src/reconcilers/minecraft_server/snapshots/shulker_operator__reconcilers__minecraft_server__gameserver__tests__build_snapshot.snap b/packages/shulker-operator/src/reconcilers/minecraft_server/snapshots/shulker_operator__reconcilers__minecraft_server__gameserver__tests__build_snapshot.snap
+index 8a4cac0..c652c7b 100644
+--- a/packages/shulker-operator/src/reconcilers/minecraft_server/snapshots/shulker_operator__reconcilers__minecraft_server__gameserver__tests__build_snapshot.snap
++++ b/packages/shulker-operator/src/reconcilers/minecraft_server/snapshots/shulker_operator__reconcilers__minecraft_server__gameserver__tests__build_snapshot.snap
+@@ -47,6 +47,8 @@ spec:
+               value: ""
+             - name: SHULKER_SERVER_LIFECYCLE_STRATEGY
+               value: AllocateWhenNotEmpty
++            - name: SHULKER_SERVER_MAX_PLAYERS
++              value: "42"
+             - name: EULA
+               value: "TRUE"
+             - name: COPY_CONFIG_DEST
+diff --git a/packages/shulker-operator/src/reconcilers/minecraft_server_fleet/snapshots/shulker_operator__reconcilers__minecraft_server_fleet__fleet__tests__build_snapshot.snap b/packages/shulker-operator/src/reconcilers/minecraft_server_fleet/snapshots/shulker_operator__reconcilers__minecraft_server_fleet__fleet__tests__build_snapshot.snap
+index 6598fe4..2d124ca 100644
+--- a/packages/shulker-operator/src/reconcilers/minecraft_server_fleet/snapshots/shulker_operator__reconcilers__minecraft_server_fleet__fleet__tests__build_snapshot.snap
++++ b/packages/shulker-operator/src/reconcilers/minecraft_server_fleet/snapshots/shulker_operator__reconcilers__minecraft_server_fleet__fleet__tests__build_snapshot.snap
+@@ -69,6 +69,8 @@ spec:
+                   value: ""
+                 - name: SHULKER_SERVER_LIFECYCLE_STRATEGY
+                   value: AllocateWhenNotEmpty
++                - name: SHULKER_SERVER_MAX_PLAYERS
++                  value: "42"
+                 - name: EULA
+                   value: "TRUE"
+                 - name: COPY_CONFIG_DEST
+diff --git a/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/ShulkerProxyAgentCommon.kt b/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/ShulkerProxyAgentCommon.kt
+index 0479a5b..46dabde 100644
+--- a/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/ShulkerProxyAgentCommon.kt
++++ b/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/ShulkerProxyAgentCommon.kt
+@@ -57,7 +57,13 @@ class ShulkerProxyAgentCommon(val proxyInterface: ProxyInterface, val logger: Lo
+                 )
+             }
+ 
+-            this.cluster.cache.registerProxy(this.cluster.selfReference.name, this.proxyInterface.getPlayerCapacity())
++            this.cluster.cache.registerProxy(
++                proxyName = this.cluster.selfReference.name,
++                proxyCapacity = this.proxyInterface.getPlayerCapacity(),
++                fleetName = this.cluster.owningFleetReference.map { it.name }.orElse(null),
++                tags = emptyList(),
++                acceptingPlayers = true,
++            )
+             this.cluster.agonesGateway.setReady()
+ 
+             this.logger.info("Proxy is ready")
+diff --git a/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/services/PlayerMovementService.kt b/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/services/PlayerMovementService.kt
+index 65e6043..8a1b223 100644
+--- a/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/services/PlayerMovementService.kt
++++ b/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/services/PlayerMovementService.kt
+@@ -86,6 +86,10 @@ class PlayerMovementService(private val agent: ShulkerProxyAgentCommon) {
+ 
+     fun setAcceptingPlayers(acceptingPlayers: Boolean) {
+         this.acceptingPlayers = acceptingPlayers
++        this.agent.cluster.cache.updateProxyAcceptingPlayers(
++            this.agent.cluster.selfReference.name,
++            acceptingPlayers,
++        )
+ 
+         if (acceptingPlayers) {
+             this.agent.fileSystem.deleteReadinessLock()
+diff --git a/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/services/ServerDirectoryService.kt b/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/services/ServerDirectoryService.kt
+index 4215335..64977b0 100644
+--- a/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/services/ServerDirectoryService.kt
++++ b/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/services/ServerDirectoryService.kt
+@@ -1,5 +1,7 @@
+ package io.shulkermc.proxy.services
+ 
++import io.shulkermc.cluster.api.adapters.cache.CacheAdapter
++import io.shulkermc.cluster.api.adapters.cache.RedisCacheAdapter
+ import io.shulkermc.cluster.api.adapters.kubernetes.WatchAction
+ import io.shulkermc.cluster.api.adapters.kubernetes.models.AgonesV1GameServer
+ import io.shulkermc.proxy.Configuration
+@@ -8,21 +10,29 @@ import io.shulkermc.proxy.adapters.filesystem.FileSystemAdapter
+ import io.shulkermc.proxy.utils.addressFromHostString
+ import java.net.InetSocketAddress
+ import java.util.Optional
+-import kotlin.text.get
++import java.util.concurrent.ConcurrentHashMap
+ 
+ class ServerDirectoryService(
+     private val agent: ShulkerProxyAgentCommon,
+ ) {
++    companion object {
++        private const val AGONES_FLEET_LABEL = "agones.dev/fleet"
++        private const val SERVER_TAGS_ANNOTATION = "minecraftserver.shulkermc.io/tags"
++    }
++
+     private val serversByTag = HashMap<String, MutableSet<String>>()
+     private val tagsByServer = HashMap<String, Set<String>>()
+ 
++    /** Names of servers coming from K8s GameServers or the CR ConfigMap. They always win over Redis. */
++    private val authoritativeServers = ConcurrentHashMap.newKeySet<String>()
++
+     private var externalServers: Optional<Map<String, FileSystemAdapter.ExternalServer>> = Optional.empty()
+ 
+     init {
+         this.agent.cluster.kubernetesGateway.watchMinecraftServerEvents { action, minecraftServer ->
+             this.agent.logger.fine("Detected modification on MinecraftServer '${minecraftServer.metadata.name}'")
+             if (action == WatchAction.ADDED || action == WatchAction.MODIFIED) {
+-                this.registerServer(minecraftServer)
++                this.registerManagedServer(minecraftServer)
+             } else if (action == WatchAction.DELETED) {
+                 this.unregisterServer(minecraftServer.metadata.name)
+             }
+@@ -31,57 +41,107 @@ class ServerDirectoryService(
+         val existingMinecraftServers = this.agent.cluster.kubernetesGateway.listMinecraftServers()
+         existingMinecraftServers.items
+             .filterNotNull()
+-            .forEach(this::registerServer)
++            .forEach(this::registerManagedServer)
+ 
+         this.agent.fileSystem.watchExternalServersUpdates(this::onExternalServersUpdate)
++
++        this.agent.cluster.pubSub.subscribe(RedisCacheAdapter.EXTERNAL_SERVER_REGISTER_CHANNEL) { serverName ->
++            this.onDynamicExternalServerRegister(serverName)
++        }
++        this.agent.cluster.pubSub.subscribe(RedisCacheAdapter.EXTERNAL_SERVER_UNREGISTER_CHANNEL) { serverName ->
++            this.onDynamicExternalServerUnregister(serverName)
++        }
++
++        this.agent.cluster.cache.listExternalDynamicServers().forEach { server ->
++            this.onDynamicExternalServerRegister(server.name)
++        }
+     }
+ 
+     fun getServersByTag(tag: String): Set<String> = this.serversByTag.getOrDefault(tag, setOf())
+ 
+-    private fun registerServer(minecraftServer: AgonesV1GameServer) {
+-        val alreadyKnown = this.agent.proxyInterface.hasServer(minecraftServer.metadata.name)
+-
+-        if (alreadyKnown || minecraftServer.status == null) {
++    private fun registerManagedServer(minecraftServer: AgonesV1GameServer) {
++        if (minecraftServer.status == null || !minecraftServer.status.isReady()) {
+             return
+         }
+ 
+-        if (minecraftServer.status.isReady()) {
+-            val tags = minecraftServer.metadata.annotations["minecraftserver.shulkermc.io/tags"]
+-
+-            this.registerServer(
+-                minecraftServer.metadata.name,
+-                addressFromHostString(
+-                    "${minecraftServer.metadata.name}.${Configuration.CLUSTER_NAME}-cluster.${minecraftServer.metadata.namespace}",
+-                ),
+-                tags?.split(",")?.toSet().orEmpty(),
++        val tags =
++            minecraftServer.metadata.annotations
++                ?.get(SERVER_TAGS_ANNOTATION)
++                ?.split(",")
++                ?.map { it.trim() }
++                ?.filter { it.isNotEmpty() }
++                ?.toSet()
++                .orEmpty()
++        val fleetName = minecraftServer.metadata.labels?.get(AGONES_FLEET_LABEL)
++        val address =
++            addressFromHostString(
++                "${minecraftServer.metadata.name}.${Configuration.CLUSTER_NAME}-cluster.${minecraftServer.metadata.namespace}",
+             )
+-        }
++
++        this.authoritativeServers.add(minecraftServer.metadata.name)
++        // Capacity is published by the server agent from SHULKER_SERVER_MAX_PLAYERS (fleet/server config).
++        this.registerServer(
++            name = minecraftServer.metadata.name,
++            address = address,
++            tags = tags,
++            source = CacheAdapter.SOURCE_MANAGED,
++            fleetName = fleetName,
++        )
+     }
+ 
+     private fun registerServer(
+         name: String,
+         address: InetSocketAddress,
+         tags: Set<String>,
++        source: String,
++        fleetName: String? = null,
++        maxPlayers: Int = 0,
+     ) {
+-        this.agent.proxyInterface.registerServer(name, address)
++        val alreadyOnProxy = this.agent.proxyInterface.hasServer(name)
++        if (!alreadyOnProxy) {
++            this.agent.proxyInterface.registerServer(name, address)
++        }
+ 
++        val previousTags = this.tagsByServer[name].orEmpty()
++        previousTags.forEach { tag -> this.serversByTag[tag]?.remove(name) }
+         for (tag in tags) {
+             this.serversByTag.getOrPut(tag) { mutableSetOf() }.add(name)
+             this.agent.logger.fine("Tagged '$tag' on server '$name'")
+         }
+         this.tagsByServer[name] = tags
+-        this.agent.logger.info("Added server '$name' to directory")
++
++        val addressString =
++            if (address.port > 0) {
++                "${address.hostString}:${address.port}"
++            } else {
++                address.hostString
++            }
++
++        this.agent.cluster.cache.registerServer(
++            name = name,
++            fleetName = fleetName,
++            tags = tags.toList(),
++            maxPlayers = maxPlayers,
++            acceptingPlayers = null,
++            address = addressString,
++            source = source,
++        )
++
++        if (!alreadyOnProxy) {
++            this.agent.logger.info("Added server '$name' to directory (source=$source)")
++        }
+     }
+ 
+     private fun unregisterServer(name: String) {
+-        if (this.agent.proxyInterface.unregisterServer(name)) {
+-            val tags = this.tagsByServer[name]
+-            if (tags != null) {
+-                tags.forEach { tag -> this.serversByTag[tag]!!.remove(name) }
+-                this.tagsByServer.remove(name)
+-            }
++        this.authoritativeServers.remove(name)
++
++        val removedFromProxy = this.agent.proxyInterface.unregisterServer(name)
++        val tags = this.tagsByServer.remove(name)
++        tags?.forEach { tag -> this.serversByTag[tag]?.remove(name) }
++
++        this.agent.cluster.cache.unregisterServer(name)
+ 
+-            this.agent.cluster.cache.unregisterServer(name)
++        if (removedFromProxy) {
+             this.agent.logger.info("Removed server '$name' from directory")
+         }
+     }
+@@ -89,14 +149,62 @@ class ServerDirectoryService(
+     private fun onExternalServersUpdate(servers: Map<String, FileSystemAdapter.ExternalServer>) {
+         this.agent.logger.info("External servers file was updated, updating directory")
+ 
+-        this.externalServers.ifPresent { existingServer ->
+-            existingServer.keys.forEach(this::unregisterServer)
++        this.externalServers.ifPresent { existingServers ->
++            existingServers.keys.forEach { name ->
++                this.authoritativeServers.remove(name)
++                this.unregisterServer(name)
++            }
+         }
+ 
+         this.externalServers = Optional.of(servers)
+ 
+         servers.values.forEach { server ->
+-            this.registerServer(server.name, server.address, server.tags)
++            this.authoritativeServers.add(server.name)
++            this.registerServer(
++                name = server.name,
++                address = server.address,
++                tags = server.tags,
++                source = CacheAdapter.SOURCE_EXTERNAL_CONFIG,
++            )
++        }
++    }
++
++    private fun onDynamicExternalServerRegister(serverName: String) {
++        if (this.authoritativeServers.contains(serverName)) {
++            this.agent.logger.fine(
++                "Ignoring dynamic external server '$serverName': authoritative source already owns this name",
++            )
++            return
++        }
++
++        val maybeServer = this.agent.cluster.cache.getServer(serverName)
++        if (maybeServer.isEmpty) {
++            this.agent.logger.warning("Received dynamic external register for unknown server '$serverName'")
++            return
++        }
++
++        val server = maybeServer.get()
++        val address = server.address
++        if (address.isNullOrBlank()) {
++            this.agent.logger.warning("Dynamic external server '$serverName' has no address, skipping")
++            return
++        }
++
++        this.registerServer(
++            name = server.name,
++            address = addressFromHostString(address),
++            tags = server.tags.toSet(),
++            source = CacheAdapter.SOURCE_EXTERNAL_DYNAMIC,
++            fleetName = server.fleetName,
++            maxPlayers = server.maxPlayers,
++        )
++    }
++
++    private fun onDynamicExternalServerUnregister(serverName: String) {
++        if (this.authoritativeServers.contains(serverName)) {
++            return
+         }
++
++        this.unregisterServer(serverName)
+     }
+ }
+diff --git a/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/tasks/LostProxyPurgeTask.kt b/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/tasks/LostProxyPurgeTask.kt
+index 91725ec..3ba31a5 100644
+--- a/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/tasks/LostProxyPurgeTask.kt
++++ b/packages/shulker-proxy-agent/src/common/kotlin/io/shulkermc/proxy/tasks/LostProxyPurgeTask.kt
+@@ -28,8 +28,8 @@ class LostProxyPurgeTask(private val agent: ShulkerProxyAgentCommon) : Runnable
+                 this.agent.cluster.cache.listRegisteredProxies()
+                     .filter { System.currentTimeMillis() - it.lastSeenAt.toEpochMilli() > PROXY_LOST_MILLIS_THRESHOLD }
+                     .forEach { proxy ->
+-                        this.agent.cluster.cache.unregisterProxy(proxy.proxyName)
+-                        this.agent.logger.info("Unregistered lost proxy ${proxy.proxyName}")
++                        this.agent.cluster.cache.unregisterProxy(proxy.name)
++                        this.agent.logger.info("Unregistered lost proxy ${proxy.name}")
+                     }
+             }
+         }
+diff --git a/packages/shulker-proxy-agent/src/velocity/kotlin/io/shulkermc/proxy/velocity/commands/GlobalControlCommand.kt b/packages/shulker-proxy-agent/src/velocity/kotlin/io/shulkermc/proxy/velocity/commands/GlobalControlCommand.kt
+index 6e54c7a..1ac2e85 100644
+--- a/packages/shulker-proxy-agent/src/velocity/kotlin/io/shulkermc/proxy/velocity/commands/GlobalControlCommand.kt
++++ b/packages/shulker-proxy-agent/src/velocity/kotlin/io/shulkermc/proxy/velocity/commands/GlobalControlCommand.kt
+@@ -30,7 +30,7 @@ object GlobalControlCommand {
+                             RequiredArgumentBuilder.argument<CommandSource, String>("proxy", StringArgumentType.word())
+                                 .suggests { _, builder ->
+                                     agent.cluster.cache.listRegisteredProxies().forEach { proxy ->
+-                                        builder.suggest(proxy.proxyName)
++                                        builder.suggest(proxy.name)
+                                     }
+ 
+                                     return@suggests builder.buildFuture()
+diff --git a/packages/shulker-server-agent/src/common/kotlin/io/shulkermc/server/Configuration.kt b/packages/shulker-server-agent/src/common/kotlin/io/shulkermc/server/Configuration.kt
+index 50939e3..a5b5a91 100644
+--- a/packages/shulker-server-agent/src/common/kotlin/io/shulkermc/server/Configuration.kt
++++ b/packages/shulker-server-agent/src/common/kotlin/io/shulkermc/server/Configuration.kt
+@@ -18,6 +18,16 @@ object Configuration {
+             .map { value -> LifecycleStrategy.byEnvValue(value) }
+             .orElse(LifecycleStrategy.ALLOCATE_WHEN_NOT_EMPTY)
+ 
++    /**
++     * Per-instance max players from the owning MinecraftServer / MinecraftServerFleet
++     * (`spec.config.maxPlayers`), injected by the operator as SHULKER_SERVER_MAX_PLAYERS.
++     * Same value written into server.properties max-players.
++     */
++    val MAX_PLAYERS: Int =
++        getOptionalStringEnv("SHULKER_SERVER_MAX_PLAYERS")
++            .map { it.toInt() }
++            .orElse(0)
++
+     private fun getOptionalStringEnv(name: String): Optional<String> = Optional.ofNullable(System.getenv(name))
+ 
+     enum class LifecycleStrategy(private val strategy: String) {
+diff --git a/packages/shulker-server-agent/src/common/kotlin/io/shulkermc/server/ShulkerServerAgentCommon.kt b/packages/shulker-server-agent/src/common/kotlin/io/shulkermc/server/ShulkerServerAgentCommon.kt
+index b567eb2..ea96b8d 100644
+--- a/packages/shulker-server-agent/src/common/kotlin/io/shulkermc/server/ShulkerServerAgentCommon.kt
++++ b/packages/shulker-server-agent/src/common/kotlin/io/shulkermc/server/ShulkerServerAgentCommon.kt
+@@ -1,6 +1,7 @@
+ package io.shulkermc.server
+ 
+ import io.shulkermc.cluster.api.ShulkerClusterAPIImpl
++import io.shulkermc.cluster.api.adapters.cache.CacheAdapter
+ import io.shulkermc.server.api.ShulkerServerAPIImpl
+ import io.shulkermc.server.services.PlayerMovementService
+ import io.shulkermc.server.tasks.HealthcheckTask
+@@ -13,6 +14,8 @@ class ShulkerServerAgentCommon(val serverInterface: ServerInterface, val logger:
+     companion object {
+         private const val SUMMON_LABEL_NAME = "shulkermc.io/summoned"
+         private const val SUMMON_TIMEOUT_MINUTES = 5L
++        private const val SERVER_TAGS_ANNOTATION = "minecraftserver.shulkermc.io/tags"
++        private const val AGONES_FLEET_LABEL = "agones.dev/fleet"
+     }
+ 
+     lateinit var cluster: ShulkerClusterAPIImpl
+@@ -48,6 +51,7 @@ class ShulkerServerAgentCommon(val serverInterface: ServerInterface, val logger:
+                 this.summonTimeoutTask = this.createSummonTimeoutTask()
+             }
+ 
++            this.registerSelfInCache()
+             this.cluster.agonesGateway.setReady()
+         } catch (
+             @Suppress("TooGenericExceptionCaught") e: Exception,
+@@ -62,6 +66,17 @@ class ShulkerServerAgentCommon(val serverInterface: ServerInterface, val logger:
+     }
+ 
+     fun shutdown() {
++        try {
++            if (this::cluster.isInitialized) {
++                this.cluster.cache.updateServerAcceptingPlayers(this.cluster.selfReference.name, false)
++                this.cluster.cache.unregisterServer(this.cluster.selfReference.name)
++            }
++        } catch (
++            @Suppress("TooGenericExceptionCaught") e: Exception,
++        ) {
++            this.logger.log(Level.WARNING, "Failed to unregister server from cluster cache", e)
++        }
++
+         try {
+             this.summonTimeoutTask?.cancel()
+ 
+@@ -74,7 +89,34 @@ class ShulkerServerAgentCommon(val serverInterface: ServerInterface, val logger:
+             this.logger.log(Level.SEVERE, "Failed to properly terminate services", e)
+         }
+ 
+-        this.cluster.close()
++        if (this::cluster.isInitialized) {
++            this.cluster.close()
++        }
++    }
++
++    private fun registerSelfInCache() {
++        val objectMeta = this.cluster.selfGameServer.objectMeta
++        val tags =
++            objectMeta.annotationsMap[SERVER_TAGS_ANNOTATION]
++                ?.split(",")
++                ?.map { it.trim() }
++                ?.filter { it.isNotEmpty() }
++                ?: emptyList()
++        val fleetName =
++            this.cluster.owningFleetReference
++                .map { it.name }
++                .orElse(objectMeta.labelsMap[AGONES_FLEET_LABEL])
++
++        this.cluster.cache.registerServer(
++            name = this.cluster.selfReference.name,
++            fleetName = fleetName,
++            tags = tags,
++            maxPlayers = Configuration.MAX_PLAYERS,
++            acceptingPlayers = true,
++            address = null,
++            source = CacheAdapter.SOURCE_MANAGED,
++        )
++        this.logger.info("Registered server '${this.cluster.selfReference.name}' in cluster cache")
+     }
+ 
+     private fun createSummonTimeoutTask() =
+diff --git a/packages/shulker-server-agent/src/common/kotlin/io/shulkermc/server/api/ShulkerServerAPIImpl.kt b/packages/shulker-server-agent/src/common/kotlin/io/shulkermc/server/api/ShulkerServerAPIImpl.kt
+index 4edc5ed..0b914f4 100644
+--- a/packages/shulker-server-agent/src/common/kotlin/io/shulkermc/server/api/ShulkerServerAPIImpl.kt
++++ b/packages/shulker-server-agent/src/common/kotlin/io/shulkermc/server/api/ShulkerServerAPIImpl.kt
+@@ -12,4 +12,11 @@ class ShulkerServerAPIImpl(private val agent: ShulkerServerAgentCommon) : Shulke
+ 
+     override fun setReserved(seconds: Long): CompletableFuture<Void> =
+         this.agent.cluster.agonesGateway.setReserved(seconds).thenAccept {}
++
++    override fun setAcceptingPlayers(acceptingPlayers: Boolean) {
++        this.agent.cluster.cache.updateServerAcceptingPlayers(
++            this.agent.cluster.selfReference.name,
++            acceptingPlayers,
++        )
++    }
+ }
+diff --git a/packages/shulker-server-api/src/main/java/io/shulkermc/server/api/ShulkerServerAPI.java b/packages/shulker-server-api/src/main/java/io/shulkermc/server/api/ShulkerServerAPI.java
+index 4457200..4322e35 100644
+--- a/packages/shulker-server-api/src/main/java/io/shulkermc/server/api/ShulkerServerAPI.java
++++ b/packages/shulker-server-api/src/main/java/io/shulkermc/server/api/ShulkerServerAPI.java
+@@ -66,4 +66,13 @@ public abstract class ShulkerServerAPI {
+      * @return A future resolving once Agones' acknowledgement
+      */
+     abstract public CompletableFuture<Void> setReserved(long seconds);
++
++    /**
++     * Updates whether this server accepts new players in the cluster cache.
++     * Use this during game liquidation / ending states so other plugins
++     * (e.g. lobby selectors) can skip this server.
++     *
++     * @param acceptingPlayers Whether new players may join
++     */
++    abstract public void setAcceptingPlayers(boolean acceptingPlayers);
+ }
