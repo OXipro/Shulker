@@ -18,6 +18,16 @@ object Configuration {
             .map { value -> LifecycleStrategy.byEnvValue(value) }
             .orElse(LifecycleStrategy.ALLOCATE_WHEN_NOT_EMPTY)
 
+    /**
+     * Per-instance max players from the owning MinecraftServer / MinecraftServerFleet
+     * (`spec.config.maxPlayers`), injected by the operator as SHULKER_SERVER_MAX_PLAYERS.
+     * Same value written into server.properties max-players.
+     */
+    val MAX_PLAYERS: Int =
+        getOptionalStringEnv("SHULKER_SERVER_MAX_PLAYERS")
+            .map { it.toInt() }
+            .orElse(0)
+
     private fun getOptionalStringEnv(name: String): Optional<String> = Optional.ofNullable(System.getenv(name))
 
     enum class LifecycleStrategy(private val strategy: String) {
