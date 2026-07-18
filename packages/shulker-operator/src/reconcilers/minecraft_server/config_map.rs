@@ -420,6 +420,18 @@ mod paper {
     #[serde(rename_all = "kebab-case")]
     pub struct PaperGlobalYml {
         proxies: PaperGlobalProxiesYml,
+        misc: PaperGlobalMiscYml,
+    }
+
+    #[derive(Deserialize, Serialize, Clone, Debug)]
+    #[serde(rename_all = "kebab-case")]
+    pub struct PaperGlobalMiscYml {
+        // Paper 1.21.9 removed `allow-nether` from server.properties (replaced by the
+        // allowEnteringNetherUsingPortals gamerule for portals) and introduced this
+        // dedicated option to fully disable the Nether dimension. We keep writing
+        // allow-nether in server.properties too for pre-1.21.9 compatibility, but this
+        // is now the setting that actually matters on current Paper builds.
+        enable_nether: bool,
     }
 
     #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -458,6 +470,9 @@ mod paper {
                         secret: "${CFG_VELOCITY_FORWARDING_SECRET}".to_string(),
                     },
                 },
+                misc: PaperGlobalMiscYml {
+                    enable_nether: !spec.disable_nether,
+                },
             }
         }
     }
@@ -495,6 +510,9 @@ mod paper {
                         online_mode: true,
                         secret: "my-secret".to_string(),
                     },
+                },
+                misc: super::PaperGlobalMiscYml {
+                    enable_nether: true,
                 },
             };
 
