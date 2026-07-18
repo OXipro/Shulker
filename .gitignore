@@ -330,3 +330,5 @@ examples/local/
 
 docs/src.
 packages/*/bin
+
+*.patch
