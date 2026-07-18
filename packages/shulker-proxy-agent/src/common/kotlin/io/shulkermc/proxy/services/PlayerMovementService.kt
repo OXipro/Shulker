@@ -86,6 +86,10 @@ class PlayerMovementService(private val agent: ShulkerProxyAgentCommon) {
 
     fun setAcceptingPlayers(acceptingPlayers: Boolean) {
         this.acceptingPlayers = acceptingPlayers
+        this.agent.cluster.cache.updateProxyAcceptingPlayers(
+            this.agent.cluster.selfReference.name,
+            acceptingPlayers,
+        )
 
         if (acceptingPlayers) {
             this.agent.fileSystem.deleteReadinessLock()
