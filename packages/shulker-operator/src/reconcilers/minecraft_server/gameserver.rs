@@ -550,6 +550,36 @@ impl<'a> GameServerBuilder {
             },
         ];
 
+        if let Some(redis_ref_credentials_secret_name) = redis_ref.credentials_secret_name.as_ref()
+        {
+            env.append(&mut vec![
+                EnvVar {
+                    name: "SHULKER_REDIS_USERNAME".to_string(),
+                    value_from: Some(EnvVarSource {
+                        secret_key_ref: Some(SecretKeySelector {
+                            name: redis_ref_credentials_secret_name.clone(),
+                            key: "username".to_string(),
+                            ..SecretKeySelector::default()
+                        }),
+                        ..EnvVarSource::default()
+                    }),
+                    ..EnvVar::default()
+                },
+                EnvVar {
+                    name: "SHULKER_REDIS_PASSWORD".to_string(),
+                    value_from: Some(EnvVarSource {
+                        secret_key_ref: Some(SecretKeySelector {
+                            name: redis_ref_credentials_secret_name.clone(),
+                            key: "password".to_string(),
+                            ..SecretKeySelector::default()
+                        }),
+                        ..EnvVarSource::default()
+                    }),
+                    ..EnvVar::default()
+                },
+            ])
+        }
+
         if let Some(owning_fleet) = context.owning_fleet {
             env.append(&mut vec![EnvVar {
                 name: "SHULKER_OWNING_FLEET_NAME".to_string(),
