@@ -178,6 +178,22 @@ mod vanilla {
             properties.insert("prevent-proxy-connections".to_string(), "false".to_string());
             properties.insert("enforce-secure-profiles".to_string(), "true".to_string());
 
+            // RCON is required by mc-server-runner (itzg/docker-minecraft-server) to
+            // perform a graceful shutdown via rcon-cli. RCON's own bootstrap
+            // (ENABLE_RCON/RCON_PASSWORD, independent from the rest of
+            // server.properties generation) is skipped along with everything else
+            // when SKIP_SERVER_PROPERTIES=true (see gameserver.rs), so we enable it
+            // here ourselves. The password is templated via
+            // REPLACE_ENV_IN_PLACE/CFG_ prefix, see the CFG_RCON_PASSWORD env var in
+            // gameserver.rs. We deliberately don't set rcon.port here: itzg's docs
+            // explicitly warn against changing it via server.properties, the
+            // built-in default of 25575 is what rcon-cli expects too.
+            properties.insert("enable-rcon".to_string(), "true".to_string());
+            properties.insert(
+                "rcon.password".to_string(),
+                "${CFG_RCON_PASSWORD}".to_string(),
+            );
+
             VanillaProperties(properties)
         }
     }
