@@ -40,6 +40,25 @@ use shulker_kube_utils::reconcilers::builder::ResourceBuilder;
 use super::config_map::ConfigMapBuilder;
 use super::MinecraftServerReconciler;
 
+/// Fallback RCON password used when the operator's own environment doesn't
+/// override it (see `get_rcon_password`). RCON (port 25575) is never exposed
+/// as a ContainerPort/Service, so it's only reachable from inside the pod's
+/// own network namespace: this is an internal handshake between
+/// mc-server-runner and rcon-cli in the same container, not a
+/// publicly-reachable credential.
+const DEFAULT_RCON_PASSWORD: &str = "shulker-internal-rcon";
+
+/// Reads the RCON password to use for every MinecraftServer from the
+/// operator's own environment (SHULKER_RCON_PASSWORD), falling back to
+/// DEFAULT_RCON_PASSWORD.
+///
+/// Overridable per-server or per-fleet via `podOverrides.env`
+/// (RCON_PASSWORD + CFG_RCON_PASSWORD): get_env appends it last, and
+/// Kubernetes lets the last duplicate env var win.
+fn get_rcon_password() -> String {
+    std::env::var("SHULKER_RCON_PASSWORD").unwrap_or_else(|_| DEFAULT_RCON_PASSWORD.to_string())
+}
+
 const MINECRAFT_SERVER_SHULKER_CONFIG_DIR: &str = "/mnt/shulker/config";
 const MINECRAFT_SERVER_CONFIG_DIR: &str = "/config";
 const MINECRAFT_SERVER_DATA_DIR: &str = "/data";
@@ -536,6 +555,24 @@ impl<'a> GameServerBuilder {
                     }),
                     ..EnvVarSource::default()
                 }),
+                ..EnvVar::default()
+            },
+            // RCON must stay enabled and reachable so mc-server-runner (itzg's
+            // entrypoint) can gracefully stop the server via rcon-cli. Because
+            // SKIP_SERVER_PROPERTIES=true also disables itzg's own automatic RCON
+            // bootstrap, we configure it ourselves:
+            // - CFG_RCON_PASSWORD is substituted into server.properties'
+            //   `rcon.password=${CFG_RCON_PASSWORD}` by REPLACE_ENV_IN_PLACE
+            // - RCON_PASSWORD is read directly by rcon-cli/mc-server-runner
+            // Both must always carry the same value, see get_rcon_password.
+            EnvVar {
+                name: "CFG_RCON_PASSWORD".to_string(),
+                value: Some(get_rcon_password()),
+                ..EnvVar::default()
+            },
+            EnvVar {
+                name: "RCON_PASSWORD".to_string(),
+                value: Some(get_rcon_password()),
                 ..EnvVar::default()
             },
             EnvVar {
@@ -1210,6 +1247,55 @@ mod tests {
             .for_each(|env_override| {
                 assert!(env.contains(env_override));
             });
+    }
+
+    #[tokio::test]
+    async fn get_env_pod_overrides_env_wins_over_rcon_password() {
+        // G
+        let client = create_client_mock();
+        let resourceref_resolver = ResourceRefResolver::new(client);
+        let mut server = TEST_SERVER.clone();
+        server.spec.pod_overrides.as_mut().unwrap().env = Some(vec![
+            EnvVar {
+                name: "RCON_PASSWORD".to_string(),
+                value: Some("my-custom-rcon-password".to_string()),
+                ..EnvVar::default()
+            },
+            EnvVar {
+                name: "CFG_RCON_PASSWORD".to_string(),
+                value: Some("my-custom-rcon-password".to_string()),
+                ..EnvVar::default()
+            },
+        ]);
+        let context = super::GameServerBuilderContext {
+            cluster: &TEST_CLUSTER,
+            agent_config: &AgentConfig {
+                maven_repository: constants::SHULKER_PLUGIN_REPOSITORY.to_string(),
+                version: constants::SHULKER_PLUGIN_VERSION.to_string(),
+            },
+            owning_fleet: None,
+        };
+
+        // W
+        let env = super::GameServerBuilder::get_env(&resourceref_resolver, &context, &server)
+            .await
+            .unwrap();
+
+        // T
+        let rcon_entries: Vec<&EnvVar> = env.iter().filter(|e| e.name == "RCON_PASSWORD").collect();
+        assert_eq!(
+            rcon_entries.last().unwrap().value.as_ref().unwrap(),
+            "my-custom-rcon-password"
+        );
+
+        let cfg_rcon_entries: Vec<&EnvVar> = env
+            .iter()
+            .filter(|e| e.name == "CFG_RCON_PASSWORD")
+            .collect();
+        assert_eq!(
+            cfg_rcon_entries.last().unwrap().value.as_ref().unwrap(),
+            "my-custom-rcon-password"
+        );
     }
 
     #[tokio::test]
