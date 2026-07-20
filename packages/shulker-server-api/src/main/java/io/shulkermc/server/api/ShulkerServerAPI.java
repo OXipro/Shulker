@@ -66,4 +66,13 @@ public abstract class ShulkerServerAPI {
      * @return A future resolving once Agones' acknowledgement
      */
     abstract public CompletableFuture<Void> setReserved(long seconds);
+
+    /**
+     * Updates whether this server accepts new players in the cluster cache.
+     * Use this during game liquidation / ending states so other plugins
+     * (e.g. lobby selectors) can skip this server.
+     *
+     * @param acceptingPlayers Whether new players may join
+     */
+    abstract public void setAcceptingPlayers(boolean acceptingPlayers);
 }

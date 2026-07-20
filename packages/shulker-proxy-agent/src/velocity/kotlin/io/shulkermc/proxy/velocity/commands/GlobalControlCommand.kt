@@ -30,7 +30,7 @@ object GlobalControlCommand {
                             RequiredArgumentBuilder.argument<CommandSource, String>("proxy", StringArgumentType.word())
                                 .suggests { _, builder ->
                                     agent.cluster.cache.listRegisteredProxies().forEach { proxy ->
-                                        builder.suggest(proxy.proxyName)
+                                        builder.suggest(proxy.name)
                                     }
 
                                     return@suggests builder.buildFuture()

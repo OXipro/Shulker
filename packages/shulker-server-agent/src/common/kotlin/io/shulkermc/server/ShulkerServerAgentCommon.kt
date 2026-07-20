@@ -1,6 +1,7 @@
 package io.shulkermc.server
 
 import io.shulkermc.cluster.api.ShulkerClusterAPIImpl
+import io.shulkermc.cluster.api.adapters.cache.CacheAdapter
 import io.shulkermc.server.api.ShulkerServerAPIImpl
 import io.shulkermc.server.services.PlayerMovementService
 import io.shulkermc.server.tasks.HealthcheckTask
@@ -13,6 +14,8 @@ class ShulkerServerAgentCommon(val serverInterface: ServerInterface, val logger:
     companion object {
         private const val SUMMON_LABEL_NAME = "shulkermc.io/summoned"
         private const val SUMMON_TIMEOUT_MINUTES = 5L
+        private const val SERVER_TAGS_ANNOTATION = "minecraftserver.shulkermc.io/tags"
+        private const val AGONES_FLEET_LABEL = "agones.dev/fleet"
     }
 
     lateinit var cluster: ShulkerClusterAPIImpl
@@ -48,6 +51,7 @@ class ShulkerServerAgentCommon(val serverInterface: ServerInterface, val logger:
                 this.summonTimeoutTask = this.createSummonTimeoutTask()
             }
 
+            this.registerSelfInCache()
             this.cluster.agonesGateway.setReady()
         } catch (
             @Suppress("TooGenericExceptionCaught") e: Exception,
@@ -63,6 +67,17 @@ class ShulkerServerAgentCommon(val serverInterface: ServerInterface, val logger:
 
     fun shutdown() {
         try {
+            if (this::cluster.isInitialized) {
+                this.cluster.cache.updateServerAcceptingPlayers(this.cluster.selfReference.name, false)
+                this.cluster.cache.unregisterServer(this.cluster.selfReference.name)
+            }
+        } catch (
+            @Suppress("TooGenericExceptionCaught") e: Exception,
+        ) {
+            this.logger.log(Level.WARNING, "Failed to unregister server from cluster cache", e)
+        }
+
+        try {
             this.summonTimeoutTask?.cancel()
 
             if (this::healthcheckTask.isInitialized) {
@@ -74,7 +89,34 @@ class ShulkerServerAgentCommon(val serverInterface: ServerInterface, val logger:
             this.logger.log(Level.SEVERE, "Failed to properly terminate services", e)
         }
 
-        this.cluster.close()
+        if (this::cluster.isInitialized) {
+            this.cluster.close()
+        }
+    }
+
+    private fun registerSelfInCache() {
+        val objectMeta = this.cluster.selfGameServer.objectMeta
+        val tags =
+            objectMeta.annotationsMap[SERVER_TAGS_ANNOTATION]
+                ?.split(",")
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
+                ?: emptyList()
+        val fleetName =
+            this.cluster.owningFleetReference
+                .map { it.name }
+                .orElse(objectMeta.labelsMap[AGONES_FLEET_LABEL])
+
+        this.cluster.cache.registerServer(
+            name = this.cluster.selfReference.name,
+            fleetName = fleetName,
+            tags = tags,
+            maxPlayers = Configuration.MAX_PLAYERS,
+            acceptingPlayers = true,
+            address = null,
+            source = CacheAdapter.SOURCE_MANAGED,
+        )
+        this.logger.info("Registered server '${this.cluster.selfReference.name}' in cluster cache")
     }
 
     private fun createSummonTimeoutTask() =

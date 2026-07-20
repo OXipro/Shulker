@@ -11,6 +11,13 @@ import java.util.UUID
 class HttpMojangGatewayAdapter : MojangGatewayAdapter {
     companion object {
         private const val HTTP_OK = 200
+
+        // Kotlin's String.replaceFirst(String, String) does a LITERAL match,
+        // not a regex one (unlike java.lang.String#replaceFirst) - a Regex
+        // object is required to actually match/insert the dashes back into
+        // the undashed UUID the Mojang API returns.
+        private val UNDASHED_UUID_PATTERN =
+            Regex("(\\p{XDigit}{8})(\\p{XDigit}{4})(\\p{XDigit}{4})(\\p{XDigit}{4})(\\p{XDigit}+)")
     }
 
     override fun getProfileFromName(playerName: String): Optional<MojangProfile> {
@@ -43,13 +50,11 @@ class HttpMojangGatewayAdapter : MojangGatewayAdapter {
     private fun getProfileFromJson(json: JsonObject): MojangProfile {
         val uuid =
             UUID.fromString(
-                json.get("id").asString.replaceFirst(
-                    "(\\p{XDigit}{8})(\\p{XDigit}{4})(\\p{XDigit}{4})(\\p{XDigit}{4})(\\p{XDigit}+)",
-                    "$1-$2-$3-$4-$5",
-                ),
+                json.get("id").asString.replace(UNDASHED_UUID_PATTERN, "$1-$2-$3-$4-$5"),
             )
         val name = json.get("name").asString
 
         return MojangProfile(uuid, name)
     }
 }
+

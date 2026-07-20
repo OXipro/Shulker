@@ -1,104 +1,81 @@
 package io.shulkermc.cluster.api
 
-import com.agones.dev.sdk.AgonesSDK
-import com.agones.dev.sdk.AgonesSDKImpl
-import com.agones.dev.sdk.GameServer
 import io.shulkermc.cluster.api.adapters.cache.CacheAdapter
 import io.shulkermc.cluster.api.adapters.cache.RedisCacheAdapter
-import io.shulkermc.cluster.api.adapters.kubernetes.ImplKubernetesGatewayAdapter
-import io.shulkermc.cluster.api.adapters.kubernetes.KubernetesGatewayAdapter
-import io.shulkermc.cluster.api.adapters.kubernetes.utils.objectRefFromFleetName
-import io.shulkermc.cluster.api.adapters.kubernetes.utils.objectRefFromGameServer
 import io.shulkermc.cluster.api.adapters.mojang.HttpMojangGatewayAdapter
 import io.shulkermc.cluster.api.adapters.mojang.MojangGatewayAdapter
 import io.shulkermc.cluster.api.adapters.pubsub.RedisPubSubAdapter
-import io.shulkermc.cluster.api.data.KubernetesObjectRef
 import io.shulkermc.cluster.api.data.PlayerPosition
 import io.shulkermc.cluster.api.data.RegisteredProxy
 import io.shulkermc.cluster.api.data.RegisteredServer
 import io.shulkermc.cluster.api.messaging.MessagingBus
+import io.shulkermc.cluster.api.standalone.StandaloneConfiguration
 import io.shulkermc.sdk.ShulkerSDK
-import io.shulkermc.sdk.ShulkerSDKImpl
 import net.kyori.adventure.text.Component
 import redis.clients.jedis.JedisPool
 import java.io.Closeable
-import java.lang.Exception
 import java.util.Optional
 import java.util.UUID
 import java.util.logging.Level
 import java.util.logging.Logger
-import kotlin.system.exitProcess
 
-class ShulkerClusterAPIImpl(val logger: Logger) : ShulkerClusterAPI(), Closeable {
-    private val configuration = Configuration.fromEnvironment()
-
-    val agonesGateway: AgonesSDK
-
-    val selfGameServer: GameServer
-    val selfReference: KubernetesObjectRef
-    val owningFleetReference: Optional<KubernetesObjectRef>
-
-    val kubernetesGateway: KubernetesGatewayAdapter
+/**
+ * A [ShulkerClusterAPI] implementation for processes running *outside* the
+ * Kubernetes cluster, as long as they have network access to the same
+ * Redis instance the cluster uses for its coordination layer (proxies,
+ * servers, tags, player positions, pub/sub events).
+ * <br>
+ * This intentionally reuses [RedisCacheAdapter]/[RedisPubSubAdapter] from
+ * this module rather than reimplementing them - the Redis layout is
+ * exactly the one described there, so an external tool built on top of
+ * this class stays in sync "for free" with in-cluster agents (proxy-agent,
+ * server-agent), and any future fix to that layout benefits both.
+ * <br>
+ * What is NOT available here compared to [ShulkerClusterAPIImpl]:
+ * - [operator] - the Shulker Operator gRPC endpoint is only reachable
+ *   in-cluster; calling it throws [UnsupportedOperationException].
+ * - This instance never registers itself as a proxy or a server. It is a
+ *   read/actor client of the registry, not a participant in it - there is
+ *   no Agones sidecar and no Kubernetes API to identify "who am I" outside
+ *   the cluster, so none of that self-registration logic applies here.
+ */
+class ShulkerClusterAPIStandalone(
+    val logger: Logger,
+    configuration: StandaloneConfiguration = StandaloneConfiguration.fromEnvironment(),
+) : ShulkerClusterAPI(), Closeable {
     val jedisPool: JedisPool
-    val mojangGateway: MojangGatewayAdapter
     val cache: CacheAdapter
     val pubSub: RedisPubSubAdapter
-
-    var operatorSdk: ShulkerSDK? = null
+    val mojangGateway: MojangGatewayAdapter
 
     init {
-        this.logger.fine("Creating Agones SDK from environment")
-        this.agonesGateway = AgonesSDKImpl.createFromEnvironment()
+        this.logger.info("Connecting to Redis at ${configuration.redis.host}:${configuration.redis.port}")
 
-        this.selfGameServer = this.agonesGateway.getGameServer().get()
-        this.selfReference = objectRefFromGameServer(this.selfGameServer)
-        this.owningFleetReference =
-            this.configuration.owningFleetName
-                .map { objectRefFromFleetName(this.selfGameServer.objectMeta.namespace, it) }
-
-        this.logger.info("Identified game server: ${this.selfReference}")
-        if (this.owningFleetReference.isPresent) {
-            this.logger.info("Identified owning fleet: ${this.owningFleetReference.get()}")
-        }
-
-        this.kubernetesGateway = ImplKubernetesGatewayAdapter(this.selfReference, this.owningFleetReference)
-        this.jedisPool = this.configuration.redis.createJedisPool()
+        this.jedisPool = configuration.redis.createJedisPool()
         this.jedisPool.resource.use { jedis -> jedis.ping() }
-        this.mojangGateway = HttpMojangGatewayAdapter()
+
         this.cache = RedisCacheAdapter(this.jedisPool)
-        this.pubSub = RedisPubSubAdapter(this.selfReference.name, this.jedisPool)
+        this.pubSub = RedisPubSubAdapter(configuration.clientName, this.jedisPool)
+        this.mojangGateway = HttpMojangGatewayAdapter()
+
+        this.logger.info("Connected as '${configuration.clientName}'")
     }
 
     override fun close() {
         try {
             this.pubSub.close()
             this.jedisPool.destroy()
-            this.kubernetesGateway.destroy()
         } catch (
             @Suppress("TooGenericExceptionCaught") e: Exception,
         ) {
             this.logger.log(Level.SEVERE, "Failed to properly destroy adapters", e)
         }
-
-        try {
-            this.agonesGateway.askShutdown()
-        } catch (
-            @Suppress("TooGenericExceptionCaught") e: Exception,
-        ) {
-            this.logger.log(
-                Level.SEVERE,
-                "Failed to ask Agones sidecar to shutdown properly, stopping process manually",
-                e,
-            )
-
-            exitProcess(0)
-        }
     }
 
-    override fun operator(): ShulkerSDK {
-        this.operatorSdk = this.operatorSdk ?: ShulkerSDKImpl.createFromEnvironment()
-        return this.operatorSdk!!
-    }
+    override fun operator(): ShulkerSDK =
+        throw UnsupportedOperationException(
+            "The Shulker Operator gRPC endpoint is only reachable from inside the cluster",
+        )
 
     override fun messaging(): MessagingBus = this.pubSub
 

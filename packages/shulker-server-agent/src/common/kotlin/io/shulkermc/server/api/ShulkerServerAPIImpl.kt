@@ -12,4 +12,11 @@ class ShulkerServerAPIImpl(private val agent: ShulkerServerAgentCommon) : Shulke
 
     override fun setReserved(seconds: Long): CompletableFuture<Void> =
         this.agent.cluster.agonesGateway.setReserved(seconds).thenAccept {}
+
+    override fun setAcceptingPlayers(acceptingPlayers: Boolean) {
+        this.agent.cluster.cache.updateServerAcceptingPlayers(
+            this.agent.cluster.selfReference.name,
+            acceptingPlayers,
+        )
+    }
 }
