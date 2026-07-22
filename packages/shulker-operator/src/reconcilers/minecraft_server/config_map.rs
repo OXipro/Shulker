@@ -6,9 +6,12 @@ use kube::Api;
 use kube::Client;
 use kube::ResourceExt;
 
+use shulker_crds::v1alpha1::minecraft_cluster::MinecraftCluster;
 use shulker_crds::v1alpha1::minecraft_server::MinecraftServer;
 use shulker_crds::v1alpha1::minecraft_server::MinecraftServerConfigurationSpec;
 use shulker_kube_utils::reconcilers::builder::ResourceBuilder;
+
+use crate::reconcilers::online_mode::resolve_online_mode;
 
 use super::MinecraftServerReconciler;
 
@@ -16,11 +19,16 @@ pub struct ConfigMapBuilder {
     client: Client,
 }
 
+#[derive(Clone, Debug)]
+pub struct ConfigMapBuilderContext<'a> {
+    pub cluster: &'a MinecraftCluster,
+}
+
 #[async_trait::async_trait]
-impl ResourceBuilder<'_> for ConfigMapBuilder {
+impl<'a> ResourceBuilder<'a> for ConfigMapBuilder {
     type OwnerType = MinecraftServer;
     type ResourceType = ConfigMap;
-    type Context = ();
+    type Context = ConfigMapBuilderContext<'a>;
 
     fn name(minecraft_server: &Self::OwnerType) -> String {
         format!("{}-config", minecraft_server.name_any())
@@ -46,8 +54,13 @@ impl ResourceBuilder<'_> for ConfigMapBuilder {
         minecraft_server: &Self::OwnerType,
         name: &str,
         _existing_config_map: Option<&Self::ResourceType>,
-        _context: Option<Self::Context>,
+        context: Option<ConfigMapBuilderContext<'a>>,
     ) -> Result<Self::ResourceType, anyhow::Error> {
+        let online_mode = resolve_online_mode(
+            context.as_ref().unwrap().cluster,
+            minecraft_server.spec.config.online_mode,
+        );
+
         let config_map = ConfigMap {
             metadata: ObjectMeta {
                 name: Some(name.to_string()),
@@ -59,7 +72,10 @@ impl ResourceBuilder<'_> for ConfigMapBuilder {
                 )),
                 ..ObjectMeta::default()
             },
-            data: Some(Self::get_data_from_spec(&minecraft_server.spec.config)),
+            data: Some(Self::get_data_from_spec(
+                &minecraft_server.spec.config,
+                online_mode,
+            )),
             ..ConfigMap::default()
         };
 
@@ -72,7 +88,10 @@ impl ConfigMapBuilder {
         ConfigMapBuilder { client }
     }
 
-    pub fn get_data_from_spec(spec: &MinecraftServerConfigurationSpec) -> BTreeMap<String, String> {
+    pub fn get_data_from_spec(
+        spec: &MinecraftServerConfigurationSpec,
+        online_mode: bool,
+    ) -> BTreeMap<String, String> {
         BTreeMap::from([
             (
                 "init-fs.sh".to_string(),
@@ -92,7 +111,7 @@ impl ConfigMapBuilder {
             ),
             (
                 "paper-global-config.yml".to_string(),
-                paper::PaperGlobalYml::from_spec(spec).to_string(),
+                paper::PaperGlobalYml::from_spec(spec, online_mode).to_string(),
             ),
         ])
     }
@@ -102,7 +121,10 @@ impl ConfigMapBuilder {
 mod tests {
     use shulker_kube_utils::reconcilers::builder::ResourceBuilder;
 
+    use crate::reconcilers::minecraft_cluster::fixtures::TEST_CLUSTER;
     use crate::reconcilers::minecraft_server::fixtures::{create_client_mock, TEST_SERVER};
+
+    use super::ConfigMapBuilderContext;
 
     #[test]
     fn name_contains_server_name() {
@@ -122,7 +144,14 @@ mod tests {
 
         // W
         let config_map = builder
-            .build(&TEST_SERVER, &name, None, None)
+            .build(
+                &TEST_SERVER,
+                &name,
+                None,
+                Some(ConfigMapBuilderContext {
+                    cluster: &TEST_CLUSTER,
+                }),
+            )
             .await
             .unwrap();
 
@@ -136,7 +165,7 @@ mod tests {
         let spec = TEST_SERVER.spec.config.clone();
 
         // W
-        let data = super::ConfigMapBuilder::get_data_from_spec(&spec);
+        let data = super::ConfigMapBuilder::get_data_from_spec(&spec, true);
 
         // T
         assert!(data.contains_key("init-fs.sh"));
@@ -148,7 +177,7 @@ mod tests {
         let spec = TEST_SERVER.spec.config.clone();
 
         // W
-        let data = super::ConfigMapBuilder::get_data_from_spec(&spec);
+        let data = super::ConfigMapBuilder::get_data_from_spec(&spec, true);
 
         // T
         assert!(data.contains_key("server.properties"));
@@ -444,17 +473,18 @@ mod paper {
     }
 
     impl PaperGlobalYml {
-        pub fn from_spec(spec: &MinecraftServerConfigurationSpec) -> Self {
+        pub fn from_spec(spec: &MinecraftServerConfigurationSpec, online_mode: bool) -> Self {
             PaperGlobalYml {
                 proxies: PaperGlobalProxiesYml {
                     bungee_cord: PaperGlobalProxiesBungeeCordYml {
                         online_mode: spec.proxy_forwarding_mode
-                            == MinecraftServerConfigurationProxyForwardingMode::BungeeCord,
+                            == MinecraftServerConfigurationProxyForwardingMode::BungeeCord
+                            && online_mode,
                     },
                     velocity: PaperGlobalProxiesVelocityYml {
                         enabled: spec.proxy_forwarding_mode
                             == MinecraftServerConfigurationProxyForwardingMode::Velocity,
-                        online_mode: true,
+                        online_mode,
                         secret: "${CFG_VELOCITY_FORWARDING_SECRET}".to_string(),
                     },
                 },
@@ -478,7 +508,7 @@ mod paper {
             let spec = TEST_SERVER.spec.config.clone();
 
             // W
-            let config = super::PaperGlobalYml::from_spec(&spec);
+            let config = super::PaperGlobalYml::from_spec(&spec, true);
 
             // T
             insta::assert_yaml_snapshot!(config);

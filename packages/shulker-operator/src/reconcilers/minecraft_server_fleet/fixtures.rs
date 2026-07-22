@@ -54,6 +54,7 @@ lazy_static! {
                         ..MinecraftServerVersionSpec::default()
                     },
                     config: MinecraftServerConfigurationSpec {
+                        online_mode: None,
                         existing_config_map_name: None,
                         world: Some(ResourceRefSpec {
                             url: Some("https://example.com/my_world.tar.gz".to_string()),

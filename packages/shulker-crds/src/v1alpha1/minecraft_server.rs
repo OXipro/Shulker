@@ -76,6 +76,15 @@ pub enum MinecraftServerVersion {
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MinecraftServerConfigurationSpec {
+    /// Overrides the `MinecraftCluster`'s online-mode for this
+    /// `MinecraftServer` (also used when templated by a
+    /// `MinecraftServerFleet`). Leave unset to inherit the cluster's default
+    /// (itself defaulting to `true`). This must be consistent with the
+    /// online-mode of the `ProxyFleet`(s) forwarding players to this server,
+    /// otherwise the forwarded player profile will be rejected
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub online_mode: Option<bool>,
+
     /// Name of an optional ConfigMap already containing the server
     /// configuration
     #[serde(skip_serializing_if = "Option::is_none")]

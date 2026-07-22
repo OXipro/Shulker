@@ -5,10 +5,13 @@ use kube::core::ObjectMeta;
 use kube::Api;
 use kube::Client;
 use kube::ResourceExt;
+use shulker_crds::v1alpha1::minecraft_cluster::MinecraftCluster;
 use shulker_crds::v1alpha1::proxy_fleet::ProxyFleetTemplateVersion;
 
 use shulker_crds::v1alpha1::proxy_fleet::ProxyFleet;
 use shulker_kube_utils::reconcilers::builder::ResourceBuilder;
+
+use crate::reconcilers::online_mode::resolve_online_mode;
 
 use super::ProxyFleetReconciler;
 
@@ -16,11 +19,16 @@ pub struct ConfigMapBuilder {
     client: Client,
 }
 
+#[derive(Clone, Debug)]
+pub struct ConfigMapBuilderContext<'a> {
+    pub cluster: &'a MinecraftCluster,
+}
+
 #[async_trait::async_trait]
-impl ResourceBuilder<'_> for ConfigMapBuilder {
+impl<'a> ResourceBuilder<'a> for ConfigMapBuilder {
     type OwnerType = ProxyFleet;
     type ResourceType = ConfigMap;
-    type Context = ();
+    type Context = ConfigMapBuilderContext<'a>;
 
     fn name(proxy_fleet: &Self::OwnerType) -> String {
         format!("{}-config", proxy_fleet.name_any())
@@ -48,8 +56,13 @@ impl ResourceBuilder<'_> for ConfigMapBuilder {
         proxy_fleet: &Self::OwnerType,
         name: &str,
         _existing_config_map: Option<&Self::ResourceType>,
-        _context: Option<Self::Context>,
+        context: Option<ConfigMapBuilderContext<'a>>,
     ) -> Result<Self::ResourceType, anyhow::Error> {
+        let online_mode = resolve_online_mode(
+            context.as_ref().unwrap().cluster,
+            proxy_fleet.spec.template.spec.config.online_mode,
+        );
+
         let mut data = BTreeMap::from([
             (
                 "init-fs.sh".to_string(),
@@ -72,6 +85,7 @@ impl ResourceBuilder<'_> for ConfigMapBuilder {
                     velocity::VelocityToml::from_spec(
                         &proxy_fleet.spec.template.spec.config,
                         proxy_fleet.spec.service.as_ref(),
+                        online_mode,
                     )
                     .to_string(),
                 );
@@ -82,6 +96,7 @@ impl ResourceBuilder<'_> for ConfigMapBuilder {
                     bungeecord::BungeeCordYml::from_spec(
                         &proxy_fleet.spec.template.spec.config,
                         proxy_fleet.spec.service.as_ref(),
+                        online_mode,
                     )
                     .to_string(),
                 );
@@ -118,7 +133,10 @@ mod tests {
     use shulker_crds::v1alpha1::proxy_fleet::ProxyFleetTemplateVersion;
     use shulker_kube_utils::reconcilers::builder::ResourceBuilder;
 
+    use crate::reconcilers::minecraft_cluster::fixtures::TEST_CLUSTER;
     use crate::reconcilers::proxy_fleet::fixtures::{create_client_mock, TEST_PROXY_FLEET};
+
+    use super::ConfigMapBuilderContext;
 
     #[test]
     fn name_contains_fleet_name() {
@@ -138,7 +156,14 @@ mod tests {
 
         // W
         let config_map = builder
-            .build(&TEST_PROXY_FLEET, &name, None, None)
+            .build(
+                &TEST_PROXY_FLEET,
+                &name,
+                None,
+                Some(ConfigMapBuilderContext {
+                    cluster: &TEST_CLUSTER,
+                }),
+            )
             .await
             .unwrap();
 
@@ -155,7 +180,14 @@ mod tests {
 
         // W
         let config_map = builder
-            .build(&TEST_PROXY_FLEET, &name, None, None)
+            .build(
+                &TEST_PROXY_FLEET,
+                &name,
+                None,
+                Some(ConfigMapBuilderContext {
+                    cluster: &TEST_CLUSTER,
+                }),
+            )
             .await
             .unwrap();
 
@@ -172,7 +204,14 @@ mod tests {
 
         // W
         let config_map = builder
-            .build(&TEST_PROXY_FLEET, &name, None, None)
+            .build(
+                &TEST_PROXY_FLEET,
+                &name,
+                None,
+                Some(ConfigMapBuilderContext {
+                    cluster: &TEST_CLUSTER,
+                }),
+            )
             .await
             .unwrap();
 
@@ -193,7 +232,14 @@ mod tests {
 
         // W
         let config_map = builder
-            .build(&TEST_PROXY_FLEET, &name, None, None)
+            .build(
+                &TEST_PROXY_FLEET,
+                &name,
+                None,
+                Some(ConfigMapBuilderContext {
+                    cluster: &TEST_CLUSTER,
+                }),
+            )
             .await
             .unwrap();
 
@@ -220,7 +266,17 @@ mod tests {
         fleet.spec.template.spec.version.channel = ProxyFleetTemplateVersion::BungeeCord;
 
         // W
-        let config_map = builder.build(&fleet, &name, None, None).await.unwrap();
+        let config_map = builder
+            .build(
+                &fleet,
+                &name,
+                None,
+                Some(ConfigMapBuilderContext {
+                    cluster: &TEST_CLUSTER,
+                }),
+            )
+            .await
+            .unwrap();
 
         // T
         assert!(config_map
@@ -283,6 +339,7 @@ mod bungeecord {
         pub fn from_spec(
             spec: &ProxyFleetTemplateConfigurationSpec,
             service_spec: Option<&ProxyFleetServiceSpec>,
+            online_mode: bool,
         ) -> Self {
             let disallow_proxy_connections = service_spec
                 .map(|spec| {
@@ -321,7 +378,7 @@ mod bungeecord {
                     proxy_protocol: spec.proxy_protocol,
                 }],
                 groups: BTreeMap::new(),
-                online_mode: true,
+                online_mode,
                 ip_forward: true,
                 prevent_proxy_connections: disallow_proxy_connections,
                 enforce_secure_profile: true,
@@ -349,6 +406,7 @@ mod bungeecord {
         fn from_spec() {
             // G
             let spec = ProxyFleetTemplateConfigurationSpec {
+                online_mode: None,
                 existing_config_map_name: None,
                 plugins: None,
                 patches: None,
@@ -366,7 +424,7 @@ mod bungeecord {
             });
 
             // W
-            let config = super::BungeeCordYml::from_spec(&spec, service_spec.as_ref());
+            let config = super::BungeeCordYml::from_spec(&spec, service_spec.as_ref(), true);
 
             // T
             insta::assert_yaml_snapshot!(config);
@@ -382,7 +440,7 @@ mod bungeecord {
             });
 
             // W
-            let config = super::BungeeCordYml::from_spec(&spec, service_spec.as_ref());
+            let config = super::BungeeCordYml::from_spec(&spec, service_spec.as_ref(), true);
 
             // T
             assert!(config.prevent_proxy_connections);
@@ -398,7 +456,7 @@ mod bungeecord {
             });
 
             // W
-            let config = super::BungeeCordYml::from_spec(&spec, service_spec.as_ref());
+            let config = super::BungeeCordYml::from_spec(&spec, service_spec.as_ref(), true);
 
             // T
             assert!(!config.prevent_proxy_connections);
@@ -411,7 +469,7 @@ mod bungeecord {
             let service_spec = None;
 
             // W
-            let config = super::BungeeCordYml::from_spec(&spec, service_spec.as_ref());
+            let config = super::BungeeCordYml::from_spec(&spec, service_spec.as_ref(), true);
 
             // T
             assert!(!config.prevent_proxy_connections);
@@ -508,6 +566,7 @@ mod velocity {
         pub fn from_spec(
             spec: &ProxyFleetTemplateConfigurationSpec,
             service_spec: Option<&ProxyFleetServiceSpec>,
+            online_mode: bool,
         ) -> Self {
             let disallow_proxy_connections = service_spec
                 .map(|spec| {
@@ -521,8 +580,8 @@ mod velocity {
                 bind: "0.0.0.0:25577".to_string(),
                 motd: spec.motd.clone(),
                 show_max_players: spec.max_players,
-                online_mode: true,
-                force_key_authentication: true,
+                online_mode,
+                force_key_authentication: online_mode,
                 prevent_client_proxy_connections: disallow_proxy_connections,
                 player_info_forwarding_mode: "modern".to_string(),
                 forwarding_secret_file: "/mnt/shulker/forwarding-secret/key".to_string(),
@@ -557,6 +616,7 @@ mod velocity {
         fn from_spec() {
             // G
             let spec = ProxyFleetTemplateConfigurationSpec {
+                online_mode: None,
                 existing_config_map_name: None,
                 plugins: None,
                 patches: None,
@@ -574,7 +634,7 @@ mod velocity {
             });
 
             // W
-            let config = super::VelocityToml::from_spec(&spec, service_spec.as_ref());
+            let config = super::VelocityToml::from_spec(&spec, service_spec.as_ref(), true);
 
             // T
             insta::assert_toml_snapshot!(config);
@@ -590,7 +650,7 @@ mod velocity {
             });
 
             // W
-            let config = super::VelocityToml::from_spec(&spec, service_spec.as_ref());
+            let config = super::VelocityToml::from_spec(&spec, service_spec.as_ref(), true);
 
             // T
             assert!(config.prevent_client_proxy_connections);
@@ -606,7 +666,7 @@ mod velocity {
             });
 
             // W
-            let config = super::VelocityToml::from_spec(&spec, service_spec.as_ref());
+            let config = super::VelocityToml::from_spec(&spec, service_spec.as_ref(), true);
 
             // T
             assert!(!config.prevent_client_proxy_connections);
@@ -619,7 +679,7 @@ mod velocity {
             let service_spec = None;
 
             // W
-            let config = super::VelocityToml::from_spec(&spec, service_spec.as_ref());
+            let config = super::VelocityToml::from_spec(&spec, service_spec.as_ref(), true);
 
             // T
             assert!(!config.prevent_client_proxy_connections);

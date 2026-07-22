@@ -5,6 +5,7 @@ mod cluster_ref;
 pub mod minecraft_cluster;
 pub mod minecraft_server;
 pub mod minecraft_server_fleet;
+mod online_mode;
 pub mod proxy_fleet;
 mod redis_ref;
 

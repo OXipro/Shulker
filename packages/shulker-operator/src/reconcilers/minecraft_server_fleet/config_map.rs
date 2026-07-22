@@ -4,8 +4,11 @@ use kube::Api;
 use kube::Client;
 use kube::ResourceExt;
 
+use shulker_crds::v1alpha1::minecraft_cluster::MinecraftCluster;
 use shulker_crds::v1alpha1::minecraft_server_fleet::MinecraftServerFleet;
 use shulker_kube_utils::reconcilers::builder::ResourceBuilder;
+
+use crate::reconcilers::online_mode::resolve_online_mode;
 
 use super::MinecraftServerFleetReconciler;
 
@@ -13,11 +16,16 @@ pub struct ConfigMapBuilder {
     client: Client,
 }
 
+#[derive(Clone, Debug)]
+pub struct ConfigMapBuilderContext<'a> {
+    pub cluster: &'a MinecraftCluster,
+}
+
 #[async_trait::async_trait]
-impl ResourceBuilder<'_> for ConfigMapBuilder {
+impl<'a> ResourceBuilder<'a> for ConfigMapBuilder {
     type OwnerType = MinecraftServerFleet;
     type ResourceType = ConfigMap;
-    type Context = ();
+    type Context = ConfigMapBuilderContext<'a>;
 
     fn name(minecraft_server_fleet: &Self::OwnerType) -> String {
         format!("{}-config", minecraft_server_fleet.name_any())
@@ -35,8 +43,13 @@ impl ResourceBuilder<'_> for ConfigMapBuilder {
         minecraft_server_fleet: &Self::OwnerType,
         name: &str,
         _existing_config_map: Option<&Self::ResourceType>,
-        _context: Option<Self::Context>,
+        context: Option<ConfigMapBuilderContext<'a>>,
     ) -> Result<Self::ResourceType, anyhow::Error> {
+        let online_mode = resolve_online_mode(
+            context.as_ref().unwrap().cluster,
+            minecraft_server_fleet.spec.template.spec.config.online_mode,
+        );
+
         let config_map = ConfigMap {
             metadata: ObjectMeta {
                 name: Some(name.to_string()),
@@ -49,6 +62,7 @@ impl ResourceBuilder<'_> for ConfigMapBuilder {
             data: Some(
                 crate::reconcilers::minecraft_server::config_map::ConfigMapBuilder::get_data_from_spec(
                     &minecraft_server_fleet.spec.template.spec.config,
+                    online_mode,
                 ),
             ),
             ..ConfigMap::default()
@@ -68,9 +82,12 @@ impl ConfigMapBuilder {
 mod tests {
     use shulker_kube_utils::reconcilers::builder::ResourceBuilder;
 
+    use crate::reconcilers::minecraft_cluster::fixtures::TEST_CLUSTER;
     use crate::reconcilers::minecraft_server_fleet::fixtures::{
         create_client_mock, TEST_SERVER_FLEET,
     };
+
+    use super::ConfigMapBuilderContext;
 
     #[test]
     fn name_contains_fleet_name() {
@@ -90,7 +107,14 @@ mod tests {
 
         // W
         let config_map = builder
-            .build(&TEST_SERVER_FLEET, &name, None, None)
+            .build(
+                &TEST_SERVER_FLEET,
+                &name,
+                None,
+                Some(ConfigMapBuilderContext {
+                    cluster: &TEST_CLUSTER,
+                }),
+            )
             .await
             .unwrap();
 

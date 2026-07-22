@@ -19,7 +19,7 @@ use shulker_crds::{
 use crate::agent::AgentConfig;
 
 use self::{
-    config_map::ConfigMapBuilder,
+    config_map::{ConfigMapBuilder, ConfigMapBuilderContext},
     gameserver::{GameServerBuilder, GameServerBuilderContext},
 };
 
@@ -53,9 +53,13 @@ impl MinecraftServerReconciler {
         )
         .await?;
 
-        reconcile_builder(&self.config_map_builder, minecraft_server.as_ref(), None)
-            .await
-            .map_err(ReconcilerError::BuilderError)?;
+        reconcile_builder(
+            &self.config_map_builder,
+            minecraft_server.as_ref(),
+            Some(ConfigMapBuilderContext { cluster: &cluster }),
+        )
+        .await
+        .map_err(ReconcilerError::BuilderError)?;
         let gameserver = reconcile_builder(
             &self.gameserver_builder,
             minecraft_server.as_ref(),

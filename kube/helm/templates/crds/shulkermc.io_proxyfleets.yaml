@@ -302,6 +302,10 @@ spec:
                             default: A Minecraft Cluster on Shulker
                             description: Message to display when the players query the status of the ProxyFleet Deployment
                             type: string
+                          onlineMode:
+                            description: Overrides the `MinecraftCluster`'s online-mode for this `ProxyFleet`. Leave unset to inherit the cluster's default (itself defaulting to `true`)
+                            nullable: true
+                            type: boolean
                           patches:
                             description: List of optional references to patch archives to download and extract at the root of the proxy. Gzippied tarballs only
                             items:

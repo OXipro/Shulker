@@ -19,7 +19,7 @@ use shulker_crds::{
 use crate::agent::AgentConfig;
 
 use self::{
-    config_map::ConfigMapBuilder,
+    config_map::{ConfigMapBuilder, ConfigMapBuilderContext},
     fleet::{FleetBuilder, FleetBuilderContext},
     fleet_autoscaler::FleetAutoscalerBuilder,
     service::ServiceBuilder,
@@ -59,9 +59,13 @@ impl ProxyFleetReconciler {
         )
         .await?;
 
-        reconcile_builder(&self.config_map_builder, proxy_fleet.as_ref(), None)
-            .await
-            .map_err(ReconcilerError::BuilderError)?;
+        reconcile_builder(
+            &self.config_map_builder,
+            proxy_fleet.as_ref(),
+            Some(ConfigMapBuilderContext { cluster: &cluster }),
+        )
+        .await
+        .map_err(ReconcilerError::BuilderError)?;
         reconcile_builder(&self.service_builder, proxy_fleet.as_ref(), None)
             .await
             .map_err(ReconcilerError::BuilderError)?;

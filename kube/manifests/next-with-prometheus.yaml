@@ -176,6 +176,10 @@ spec:
                     type: string
                   nullable: true
                   type: array
+                onlineMode:
+                  description: Default online-mode (Mojang session authentication) applied to every `ProxyFleet` and `MinecraftServer`/`MinecraftServerFleet` enrolled in this cluster, unless overridden on the resource itself. Defaults to `true`. Setting this to `false` disables Mojang authentication cluster-wide, which also disables premium UUID/skin resolution
+                  nullable: true
+                  type: boolean
                 redis:
                   description: Redis configuration to use as a synchronization backend for the different Shulker components
                   nullable: true
@@ -521,6 +525,10 @@ spec:
                               format: uint32
                               minimum: 0.0
                               type: integer
+                            onlineMode:
+                              description: Overrides the `MinecraftCluster`'s online-mode for this `MinecraftServer` (also used when templated by a `MinecraftServerFleet`). Leave unset to inherit the cluster's default (itself defaulting to `true`). This must be consistent with the online-mode of the `ProxyFleet`(s) forwarding players to this server, otherwise the forwarded player profile will be rejected
+                              nullable: true
+                              type: boolean
                             patches:
                               description: List of optional references to patch archives to download and extract at the root of the server. Gzippied tarballs only
                               items:
@@ -2808,6 +2816,10 @@ spec:
                       format: uint32
                       minimum: 0.0
                       type: integer
+                    onlineMode:
+                      description: Overrides the `MinecraftCluster`'s online-mode for this `MinecraftServer` (also used when templated by a `MinecraftServerFleet`). Leave unset to inherit the cluster's default (itself defaulting to `true`). This must be consistent with the online-mode of the `ProxyFleet`(s) forwarding players to this server, otherwise the forwarded player profile will be rejected
+                      nullable: true
+                      type: boolean
                     patches:
                       description: List of optional references to patch archives to download and extract at the root of the server. Gzippied tarballs only
                       items:
@@ -5316,6 +5328,10 @@ spec:
                               default: A Minecraft Cluster on Shulker
                               description: Message to display when the players query the status of the ProxyFleet Deployment
                               type: string
+                            onlineMode:
+                              description: Overrides the `MinecraftCluster`'s online-mode for this `ProxyFleet`. Leave unset to inherit the cluster's default (itself defaulting to `true`)
+                              nullable: true
+                              type: boolean
                             patches:
                               description: List of optional references to patch archives to download and extract at the root of the proxy. Gzippied tarballs only
                               items:

@@ -19,7 +19,7 @@ use shulker_crds::{
 use crate::agent::AgentConfig;
 
 use self::{
-    config_map::ConfigMapBuilder,
+    config_map::{ConfigMapBuilder, ConfigMapBuilderContext},
     fleet::{FleetBuilder, FleetBuilderContext},
     fleet_autoscaler::FleetAutoscalerBuilder,
 };
@@ -59,7 +59,7 @@ impl MinecraftServerFleetReconciler {
         reconcile_builder(
             &self.config_map_builder,
             minecraft_server_fleet.as_ref(),
-            None,
+            Some(ConfigMapBuilderContext { cluster: &cluster }),
         )
         .await
         .map_err(ReconcilerError::BuilderError)?;

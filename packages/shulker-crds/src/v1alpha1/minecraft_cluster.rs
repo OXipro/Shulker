@@ -14,6 +14,14 @@ use strum::{Display, IntoStaticStr};
 )]
 #[serde(rename_all = "camelCase")]
 pub struct MinecraftClusterSpec {
+    /// Default online-mode (Mojang session authentication) applied to every
+    /// `ProxyFleet` and `MinecraftServer`/`MinecraftServerFleet` enrolled in
+    /// this cluster, unless overridden on the resource itself. Defaults to
+    /// `true`. Setting this to `false` disables Mojang authentication
+    /// cluster-wide, which also disables premium UUID/skin resolution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub online_mode: Option<bool>,
+
     /// List of player UUIDs that are automatically promoted as
     /// network administrators, which are granted all the permissions
     /// by default on all the proxies and servers

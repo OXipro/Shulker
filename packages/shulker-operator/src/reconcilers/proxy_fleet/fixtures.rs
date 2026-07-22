@@ -50,6 +50,7 @@ lazy_static! {
                         name: "latest".to_string(),
                     },
                     config: ProxyFleetTemplateConfigurationSpec {
+                        online_mode: None,
                         existing_config_map_name: None,
                         plugins: Some(vec![ResourceRefSpec {
                             url: Some("https://example.com/my_plugin.jar".to_string()),

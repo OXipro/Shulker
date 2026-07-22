@@ -14,6 +14,7 @@ lazy_static! {
             ..ObjectMeta::default()
         },
         spec: MinecraftClusterSpec {
+            online_mode: None,
             network_admins: None,
             redis: None,
             external_servers: Some(vec![MinecraftClusterExternalServerSpec {

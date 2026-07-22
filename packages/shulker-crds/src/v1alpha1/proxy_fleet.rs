@@ -95,6 +95,12 @@ pub enum ProxyFleetTemplateVersion {
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyFleetTemplateConfigurationSpec {
+    /// Overrides the `MinecraftCluster`'s online-mode for this `ProxyFleet`.
+    /// Leave unset to inherit the cluster's default (itself defaulting to
+    /// `true`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub online_mode: Option<bool>,
+
     /// Name of an optional ConfigMap already containing the proxy
     /// configuration
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -51,6 +51,10 @@ spec:
                   type: string
                 nullable: true
                 type: array
+              onlineMode:
+                description: Default online-mode (Mojang session authentication) applied to every `ProxyFleet` and `MinecraftServer`/`MinecraftServerFleet` enrolled in this cluster, unless overridden on the resource itself. Defaults to `true`. Setting this to `false` disables Mojang authentication cluster-wide, which also disables premium UUID/skin resolution
+                nullable: true
+                type: boolean
               redis:
                 description: Redis configuration to use as a synchronization backend for the different Shulker components
                 nullable: true
