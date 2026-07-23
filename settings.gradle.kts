@@ -47,7 +47,9 @@ includeBindingProject("google-open-match-sdk")
 includeBindingProject("shulker-sdk")
 
 include(":packages:shulker-cluster-api")
+include(":packages:shulker-cluster-api-redis")
 include(":packages:shulker-cluster-api-impl")
+include(":packages:shulker-cluster-api-standalone-impl")
 
 include(":packages:shulker-proxy-api")
 include(":packages:shulker-proxy-agent")

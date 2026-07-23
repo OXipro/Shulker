@@ -2,7 +2,7 @@
   <img src=".github/assets/logo.png" alt="logo" width="100" height="auto" />
   <h1>Shulker</h1>
   <p>The modern way of putting Minecraft in <i>boxes</i> :package:</p>
-  
+
   <p>
     <a href="https://github.com/jeremylvln/Shulker/issues/">
       <img src="https://img.shields.io/github/issues/jeremylvln/Shulker?style=flat-square" alt="Open Issues" />
@@ -21,7 +21,7 @@
       <img src="https://img.shields.io/github/sponsors/jeremylvln?style=flat-square" alt="GitHub Sponsors" />
     </a>
   </p>
-   
+
   <h4>
     <a href="https://shulker.jeremylvln.fr">Documentation</a>
     <span> · </span>
@@ -32,6 +32,13 @@
     <a href="https://github.com/jeremylvln/Shulker/discussions">Discussions</a>
   </h4>
 </div>
+
+## FORK WARNING
+
+This fork is under active developpment. Please be carefull with use.
+Since I'm learning Rust and Kotlin (I understand and read it, but not able to write from scratch),
+I'm using IA (essentialy Claude, Grok, ChatGPT) to help me wire the actuall stuff.
+So use with caution and be aware of this !
 
 ## Description
 

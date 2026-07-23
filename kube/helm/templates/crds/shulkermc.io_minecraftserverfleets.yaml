@@ -929,7 +929,7 @@ spec:
                                 type: object
                             type: object
                           env:
-                            description: Extra environment variables to add to the created `Pod`
+                            description: Extra environment variables to add to the created `Pod`. Also applies to `MinecraftServerFleet`, which templates this spec. Takes precedence over variables Shulker sets itself, e.g. RCON_PASSWORD
                             items:
                               description: EnvVar represents an environment variable present in a Container.
                               properties:

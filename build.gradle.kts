@@ -199,8 +199,16 @@ subprojects {
     }
 
     signing {
-        useGpgCmd()
-        sign(publishing.publications["mavenJava"])
+        // Signing is only relevant for artifacts we actually publish externally.
+        // Wiring `sign(...)` unconditionally makes the signing plugin declare a
+        // .asc file as an expected artifact of the publication, which then makes
+        // `publishToMavenLocal` fail if you don't have a GPG key configured -
+        // even if you `-x` the sign task itself, since the artifact is still
+        // "promised". So: only call sign() at all for real release builds.
+        if (System.getenv("IS_RELEASE") == "true") {
+            useGpgCmd()
+            sign(publishing.publications["mavenJava"])
+        }
     }
 
     fun registerPluginProvider(

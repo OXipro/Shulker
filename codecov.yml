@@ -37,6 +37,12 @@ coverage:
       shulker-cluster-api-impl:
         flags:
           - shulker-cluster-api-impl
+      shulker-cluster-api-redis:
+        flags:
+          - shulker-cluster-api-redis
+      shulker-cluster-api-standalone-impl:
+        flags:
+          - shulker-cluster-api-standalone-impl
       shulker-crds:
         flags:
           - shulker-crds
@@ -106,6 +112,14 @@ flags:
   shulker-cluster-api-impl:
     paths:
       - packages/shulker-cluster-api-impl
+    carryforward: true
+  shulker-cluster-api-redis:
+    paths:
+      - packages/shulker-cluster-api-redis
+    carryforward: true
+  shulker-cluster-api-standalone-impl:
+    paths:
+      - packages/shulker-cluster-api-standalone-impl
     carryforward: true
   shulker-crds:
     paths:

@@ -64,6 +64,10 @@ spec:
                 secretKeyRef:
                   key: key
                   name: my-cluster-forwarding-secret
+            - name: CFG_RCON_PASSWORD
+              value: shulker-internal-rcon
+            - name: RCON_PASSWORD
+              value: shulker-internal-rcon
             - name: MEMORY
               value: ""
             - name: JVM_XX_OPTS
