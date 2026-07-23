@@ -9,5 +9,7 @@ proxies:
     enabled: true
     online-mode: true
     secret: my-secret
+misc:
+  enable-nether: true
 
 
