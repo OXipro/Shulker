@@ -33,6 +33,12 @@
   </h4>
 </div>
 
+## FORK WARNING
+This fork is under active developpment. Please be carefull with use.
+Since I'm learning Rust and Kotlin (I understand and read it, but not able to write from scratch), 
+I'm using IA (essentialy Claude, Grok, ChatGPT) to help me wire the actuall stuff.
+So use with caution and be aware of this !
+
 ## Description
 
 Shulker aims to be your default choice to managing Minecraft infrastructures

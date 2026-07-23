@@ -184,7 +184,9 @@ pub struct MinecraftServerPodOverridesSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<ImageOverrideSpec>,
 
-    /// Extra environment variables to add to the created `Pod`
+    /// Extra environment variables to add to the created `Pod`. Also applies
+    /// to `MinecraftServerFleet`, which templates this spec. Takes
+    /// precedence over variables Shulker sets itself, e.g. RCON_PASSWORD
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<Vec<k8s_openapi::api::core::v1::EnvVar>>,
 

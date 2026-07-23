@@ -4,8 +4,10 @@ expression: config.0
 ---
 {
     "allow-nether": "true",
+    "enable-rcon": "true",
     "enforce-secure-profiles": "true",
     "max-players": "42",
     "online-mode": "false",
     "prevent-proxy-connections": "false",
+    "rcon.password": "${CFG_RCON_PASSWORD}",
 }
